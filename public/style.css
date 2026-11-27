@@ -538,3 +538,69 @@ details.release[open] summary { margin-bottom: 8px; }
 .stat-table th { text-align: right; font-weight: 650; color: var(--text-2); padding: 6px 8px; white-space: nowrap; }
 .stat-table td { text-align: right; padding: 6px 8px; border-top: 1px solid var(--divider); }
 .stat-table th:first-child, .stat-table td:first-child { text-align: left; }
+
+/* ---------- 1.2: pause, snooze, search, sessions, undo ---------- */
+.timerbar.paused .clock { opacity: 0.6; }
+.timerbar.paused .what span { opacity: 1; font-weight: 650; }
+.timerbar .icon-btn svg { width: 20px; height: 20px; }
+.stuff-tools { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.stuff-tools .filters { margin: 0; }
+.item-row.snoozed .name { color: var(--text-2); }
+.snooze-note { background: var(--surface-2); border-radius: 14px; padding: 12px 14px; margin: 0; font-size: 0.925rem; }
+.btn svg { width: 18px; height: 18px; flex: none; }
+.session-row { width: 100%; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.session-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.session-row .session-note { font-size: 0.9rem; color: var(--text); margin-top: 3px; white-space: normal; overflow-wrap: anywhere; }
+.session-row .session-note::before { content: "“"; color: var(--text-2); }
+.session-row .session-note::after { content: "”"; color: var(--text-2); }
+.sess { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.3; padding-right: 8px; }
+textarea.input { resize: vertical; min-height: 64px; padding-top: 12px; line-height: 1.4; font: inherit; }
+#toast.has-action { display: flex; }
+#toast.show.has-action { align-items: center; gap: 14px; pointer-events: auto; padding-right: 8px; }
+.toast-action { border: 0; background: none; color: inherit; font: inherit; font-weight: 750; padding: 8px 12px; border-radius: 10px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.toast-action:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ---------- streak freezes & monthly goal ---------- */
+.freeze-pill { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 8px 1px 6px; border-radius: 999px; background: #DDEEFB; color: #1F5F8F; font-size: 0.8rem; font-weight: 700; vertical-align: 1px; }
+.freeze-pill svg, .mini-ice svg { width: 14px; height: 14px; }
+.mini-ice { display: inline-flex; color: #3A86C2; margin-right: 4px; vertical-align: -2px; }
+@media (prefers-color-scheme: dark) { .freeze-pill { background: #173247; color: #A9D4F5; } .mini-ice { color: #7DBBEA; } }
+.goal { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0; text-align: left; cursor: pointer; color: var(--text); margin-top: 10px; }
+.goal .main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.goal .pct { font-weight: 750; font-size: 1.05rem; font-feature-settings: "tnum"; }
+.goal-ring { flex: none; }
+.goal-ring .track { fill: none; stroke: var(--surface-2); stroke-width: 6; }
+.goal-ring .fill { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset .8s cubic-bezier(.2,.8,.2,1); }
+.goal.reached .goal-ring .fill { stroke: #2E9E6B; }
+section > .goal:first-child, .goal + .tiles { margin-top: 0; }
+.version-btn + .tiles, .goal + .tiles { margin-top: 12px; }
+
+/* ---------- weekly challenge & nudges ---------- */
+.challenge { padding: 16px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.challenge p { margin: 0; }
+.challenge-head { display: flex; align-items: center; gap: 12px; }
+.challenge-head .main { flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.challenge-head b { font-size: 1.1rem; font-weight: 750; }
+.challenge .trophy { width: 42px; height: 42px; border-radius: 12px; background: #FFF1D6; color: #A86A00; display: grid; place-items: center; flex: none; }
+.challenge .trophy svg { width: 24px; height: 24px; }
+@media (prefers-color-scheme: dark) { .challenge .trophy { background: #3A2C12; color: #F2C46B; } }
+.challenge-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.challenge-list li { display: grid; grid-template-columns: 18px minmax(0, 7.5em) 1fr auto; align-items: center; gap: 10px; font-size: 0.925rem; }
+.challenge-list .rank { color: var(--text-2); font-weight: 650; }
+.challenge-list .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.challenge-list .bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.challenge-list .bar span { display: block; height: 100%; border-radius: 4px; background: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
+.challenge-list li.me .bar span { background: var(--accent); }
+.challenge-list b { font-feature-settings: "tnum"; font-weight: 700; white-space: nowrap; }
+.board li.with-nudge { display: flex; align-items: center; }
+.board li.with-nudge .board-row { flex: 1; min-width: 0; }
+.nudge-btn { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; border: 0; border-radius: 999px; padding: 7px 12px; background: #FDEBDD; color: #9A4A12; font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
+.nudge-btn svg { width: 16px; height: 16px; }
+.nudge-btn:disabled { background: var(--surface-2); color: var(--text-2); cursor: default; }
+@media (prefers-color-scheme: dark) { .nudge-btn { background: #3D2414; color: #F5B98A; } }
+
+/* ---------- offline ---------- */
+#offline-bar { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 8px); transform: translateX(-50%); z-index: 50;
+  max-width: calc(100% - 24px); white-space: nowrap; padding: 6px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 0.8rem; font-weight: 650; text-align: center; box-shadow: var(--shadow); }
+/* the toast is a popover, so it sits above open sheets (and its Undo button stays clickable) */
+#toast[popover] { inset: auto; margin: 0; border: 0; overflow: visible; left: 50%; bottom: calc(var(--nav-h) + var(--safe-b) + 14px); }

@@ -52,12 +52,16 @@ for (const f of ['Name', 'Step', 'Username', 'Minutes']) {
   '8-day streak', 'Dusted off after 41 days', 'Rediscovered after 15 days', 'Wheel’s pick', 'Live timer', 'Deep focus, 2 h+', 'Focus, 1 h+',
   'your 7-day streak', 'a 30-day streak', 'your finished project', 'a finished project', 'your “Hat trick” badge', 'an “The monk” badge', 'a moment',
   'hit a 7-day streak', 'finished a project', 'unlocked “Spin doctor”', 'did something great',
+  'your weekly challenge win', 'a weekly challenge win', 'won the weekly challenge', 'Note can be at most 200 characters', 'Days must be between 0 and 30',
   'Safari on iPhone', 'Chrome on Android', 'Firefox on Windows', 'Edge on Mac', 'Linux', 'Unknown device', 'Chrome on Unknown device',
 ].forEach((s) => samples.add(s));
 // achievement names and descriptions
+// texts the app translates from a variable (challenges, sort labels)
+for (const m of app.matchAll(/^\s+\w+: \['([^']+)', '([^']+)'\],$/gm)) { samples.add(m[1]); samples.add(m[2]); }
+for (const m of (app.match(/STUFF_SORTS = \{([^}]+)\}/) || ['', ''])[1].matchAll(/'([^']+)'/g)) if (!/^[a-z]+$/.test(m[1])) samples.add(m[1]);
 const achSrc = read('achievements.js');
 for (const m of achSrc.matchAll(/name: '((?:[^'\\]|\\.)*)', desc: '((?:[^'\\]|\\.)*)'/g)) { samples.add(unq(m[1])); samples.add(unq(m[2])); }
-const sameInBoth = new Set(['Linux', 'Live timer', 'Hobby', 'Game', 'Project', 'Centurion', 'Stopwatch', 'Renaissance']);
+const sameInBoth = new Set(['A–Z', 'Linux', 'Live timer', 'Hobby', 'Game', 'Project', 'Centurion', 'Stopwatch', 'Renaissance']);
 for (const s of samples) {
   const out = TS(s);
   if (out === s && !sameInBoth.has(s)) fail(`server text stays English: ${s}`);

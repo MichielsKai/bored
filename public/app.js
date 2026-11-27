@@ -22,6 +22,7 @@ const store = {
 
 let S = null;               // server state
 let config = { firstUser: false, defaultHours: 20 };
+const PAGE_VERSION = (() => { try { return new URL(document.currentScript.src).searchParams.get('v') || 'dev'; } catch { return 'dev'; } })();
 let view = store.get('view', 'spin');
 let clockOffset = 0;
 let wheelRot = store.get('rot', 0);
@@ -35,15 +36,29 @@ let freshId = null, timerJustStarted = false;
 async function api(method, url, body) {
   const opts = { method, credentials: 'same-origin', headers: {} };
   if (method !== 'GET') { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body || {}); }
+  if (method !== 'GET' && queue().length && !flushing) await flushQueue();   // keep things in order
   let res;
-  try { res = await fetch(url, opts); } catch { throw new Error(T('Can’t reach the server. Check your connection.')); }
+  try { res = await fetch(url, opts); } catch {
+    if (method !== 'GET' && S) { const r = offlineDo(method, url, body || {}); if (r) return r; }
+    throw Object.assign(new Error(method === 'GET' ? T('Can’t reach the server. Check your connection.') : T('You’re offline. This one has to wait until you’re back online.')), { network: true });
+  }
   let data = {};
   try { data = await res.json(); } catch { /* empty */ }
-  if (res.status === 401 && data.error === 'Sign in to continue') { S = null; closeSheet(); renderAuth(); throw Object.assign(new Error(TS(data.error)), { signedOut: true }); }
+  if (res.status === 401 && data.error === 'Sign in to continue') { S = null; forgetDevice(); closeSheet(); renderAuth(); throw Object.assign(new Error(TS(data.error)), { signedOut: true }); }
   if (!res.ok) throw new Error(data.error ? TS(data.error) : T('Request failed ({n})', { n: res.status }));
   if (data && Array.isArray(data.items)) setState(data);
   if (data && Array.isArray(data.achievements) && data.achievements.length && url !== '/api/achievements') {
     const list = data.achievements; enqueue(() => showAchievements(list));
+  }
+  if (data && Array.isArray(data.nudges) && data.nudges.length) {
+    const names = [...new Set(data.nudges.map((n) => n.from))];
+    const streak = data.score ? data.score.streak : 0;
+    setTimeout(() => {
+      const who = names.length === 1 ? names[0] : Tn(names.length - 1, '{name} and 1 other', '{name} and {n} others', { name: names[0] });
+      toast(streak ? T('{who} nudged you: your {n}-day streak needs 15 minutes today', { who, n: streak }) : T('{who} nudged you to get going today', { who }));
+      SFX.pop(); buzz([10, 40, 10]);
+    }, 1200);
+    api('POST', '/api/nudges/seen').catch(() => {});
   }
   if (data && Array.isArray(data.highFives) && data.highFives.length) {
     const hf = data.highFives;
@@ -59,7 +74,97 @@ async function api(method, url, body) {
   return data;
 }
 const now = () => Date.now() + clockOffset;
-function setState(d) { S = d; clockOffset = d.now - Date.now(); render(); }
+function setState(d) {
+  S = d; clockOffset = d.now - Date.now(); render(); checkGoal();
+  store.set('lastState', S);   // opens with this when there's no connection
+}
+const refresh = () => api('GET', '/api/state').catch(() => {});
+
+// ---------- offline ----------
+// The app keeps the last state on this device and opens with it when there's no connection.
+// Timers and logged time go into a queue with the time they happened, and are sent in order
+// once the connection is back. Everything else needs a connection.
+let flushing = false;
+const queue = () => store.get('queue', []);
+const saveQueue = (list) => store.set('queue', list);
+const itemName = (id) => (S.items.find((i) => i.id === id) || {}).name || '';
+function localLog(itemId, minutes, endedAt, source, note) {
+  S.logs.unshift({ id: -Date.now(), item_id: itemId, minutes, ended_at: endedAt, source, points: 0, note: note || '', edited: 0, item_name: itemName(itemId), pending: true });
+  const it = S.items.find((i) => i.id === itemId);
+  if (it) { it.minutes += minutes; it.sessions += 1; it.last_at = endedAt; }
+  const b = S.bank; b.earnedMinutes += minutes;
+  const balance = b.earnedMinutes - b.spentMinutes;
+  b.unlocks = balance > 0 ? Math.floor(balance / b.costMinutes) : 0;
+  b.progressMinutes = balance > 0 ? balance % b.costMinutes : 0;
+}
+function offlineDo(method, url, body) {
+  const key = `${method} ${url}`, t = now();
+  let result = {};
+  if (key === 'POST /api/timer/start') {
+    if (S.timer) return null;
+    body = { ...body, startedAt: t };
+    S.timer = { item_id: body.itemId, item_name: itemName(body.itemId), started_at: t, from_spin: body.fromSpin ? 1 : 0, paused_at: 0, paused_ms: 0 };
+  } else if (key === 'POST /api/timer/pause' || key === 'POST /api/timer/resume') {
+    if (!S.timer) return null;
+    body = { at: t };
+    if (url.endsWith('pause')) { if (!S.timer.paused_at) S.timer.paused_at = t; }
+    else if (S.timer.paused_at) { S.timer.paused_ms = (S.timer.paused_ms || 0) + t - S.timer.paused_at; S.timer.paused_at = 0; }
+  } else if (key === 'POST /api/timer/stop') {
+    if (!S.timer) return null;
+    const elapsed = Math.round(timerMs() / 60000);
+    const minutes = body.minutes !== undefined ? Math.min(body.minutes, Math.max(elapsed, 1)) : Math.min(elapsed, 1440);
+    body = { ...body, endedAt: t };
+    const itemId = S.timer.item_id; S.timer = null;
+    if (minutes >= 1) localLog(itemId, minutes, t, 'timer', body.note);
+    result = { logged: minutes, newUnlocks: 0, earned: null };
+  } else if (key === 'POST /api/timer/cancel') {
+    S.timer = null;
+  } else if (key === 'POST /api/logs') {
+    body = { ...body, endedAt: body.endedAt || t };
+    localLog(body.itemId, body.minutes, body.endedAt, 'manual', body.note);
+    result = { logged: body.minutes, newUnlocks: 0, earned: null };
+  } else return null;
+  saveQueue([...queue(), { method, url, body, user: S.user.username }]);
+  setState({ ...S, now: Date.now() + clockOffset });
+  setOffline(true);
+  return { ...result, offline: true };
+}
+async function flushQueue() {
+  if (flushing || !S) return;
+  if (!queue().length) { setOffline(false); return; }
+  flushing = true;
+  let sent = 0;
+  try {
+    while (queue().length) {
+      const [job, ...rest] = queue();
+      if (job.user === S.user.username) {
+        let res;
+        try {
+          res = await fetch(job.url, { method: job.method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job.body) });
+        } catch { setOffline(true); return; }                            // still offline: try again later
+        if (res.status === 401 || res.status === 429 || res.status >= 500) return;
+        if (!res.ok) { const d = await res.json().catch(() => ({})); if (d.error) toast(TS(d.error)); }   // refused: drop it
+        sent++;
+      }
+      saveQueue(rest);
+    }
+    setOffline(false);
+    if (sent) toast(T('Back online. Everything you did offline is saved.'));
+  } finally { flushing = false; }
+  if (sent) await refresh();
+}
+// Signed out: don't leave your data (or unsent changes) on this device.
+function forgetDevice() { try { localStorage.removeItem('bored.lastState'); localStorage.removeItem('bored.queue'); } catch { /* private mode */ } setOffline(false); }
+function setOffline(on) {
+  let bar = $('#offline-bar');
+  const n = queue().length;
+  if (!on) { bar?.remove(); return; }
+  if (!bar) { bar = document.createElement('div'); bar.id = 'offline-bar'; bar.setAttribute('role', 'status'); document.body.append(bar); }
+  bar.textContent = n ? Tn(n, 'Offline: 1 change waits to sync', 'Offline: {n} changes wait to sync')
+    : T('Offline: timers still work');
+}
+addEventListener('online', () => flushQueue());
+addEventListener('offline', () => { if (S) setOffline(true); });
 
 // ---------- formatting ----------
 const nf = new Intl.NumberFormat(LOCALE);
@@ -88,12 +193,14 @@ const day = (ts) => new Date(ts).toLocaleDateString(LOCALE, { day: 'numeric', mo
 const money = (p) => p == null ? '' : new Intl.NumberFormat(LOCALE, { style: 'currency', currency: 'EUR', maximumFractionDigits: p % 1 ? 2 : 0 }).format(p);
 const colorOf = (item) => INKS[(item.id - 1) % INKS.length];
 const active = () => S.items.filter((i) => !i.archived);
+const snoozed = (i) => i.snoozed_until > now();
+const onWheel = () => active().filter((i) => !snoozed(i));
 
 // Quick filters for the wheel: tags (AND) and kinds (any of).
 let filters = store.get('filters', { quick: false, chill: false, kinds: [] });
 const filtering = () => filters.quick || filters.chill || filters.kinds.length > 0;
 function wheelItems() {
-  return active().filter((i) => (!filters.quick || i.quick) && (!filters.chill || i.chill) && (!filters.kinds.length || filters.kinds.includes(i.kind)));
+  return onWheel().filter((i) => (!filters.quick || i.quick) && (!filters.chill || i.chill) && (!filters.kinds.length || filters.kinds.includes(i.kind)));
 }
 
 // Neglected things get bigger slices: 1× if touched today, up to 3× after four weeks or never.
@@ -103,7 +210,7 @@ function weightOf(item) {
   return 1 + Math.min(Math.max(days, 0), 28) / 14;
 }
 function odds(item) {
-  const list = active();
+  const list = onWheel();
   const total = list.reduce((a, i) => a + weightOf(i), 0);
   return total ? Math.round((weightOf(item) / total) * 100) : 0;
 }
@@ -128,6 +235,12 @@ const ICON = {
   star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 2.8 2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9L12 2.8Z"/></svg>',
   crown: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7.5 7.5 11 12 4l4.5 7L21 7.5 19 18H5L3 7.5Z"/><rect x="5" y="19.5" width="14" height="2" rx="1"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.2" height="14" rx="1.4"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.4"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.6v12.8c0 .9 1 1.4 1.7.9l9.4-6.4c.6-.4.6-1.3 0-1.8L9.7 4.7C9 4.2 8 4.7 8 5.6Z"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>',
+  snow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7M10 17h4"/></svg>',
   pointer: '<svg viewBox="0 0 30 34"><path d="M15 32c-1 0-1.7-.6-2.2-1.4L4.2 12.8A11.5 11.5 0 1 1 25.8 12.8l-8.6 17.8c-.5.8-1.2 1.4-2.2 1.4Z" fill="currentColor"/></svg>',
 };
 
@@ -180,12 +293,16 @@ function bankPill() {
   return `<button class="bankpill ${b.unlocks ? 'ready' : ''}" data-act="nav" data-v="shop" aria-label="${esc(T('{label}, open wishlist', { label }))}">${ring}<span>${label}</span></button>`;
 }
 
+// Time on the running timer, minus pauses.
+const timerMs = (t = S.timer) => (t.paused_at || now()) - t.started_at - (t.paused_ms || 0);
 function timerBar() {
   if (!S.timer) return '';
   const enter = timerJustStarted; timerJustStarted = false;
-  return `<div class="timerbar ${enter ? 'enter' : ''}" role="timer">
-    <div class="what"><span>${T('Timing')}</span><b>${esc(S.timer.item_name)}</b></div>
-    <span class="clock" id="clock">${clock(now() - S.timer.started_at)}</span>
+  const paused = !!S.timer.paused_at;
+  return `<div class="timerbar ${enter ? 'enter' : ''} ${paused ? 'paused' : ''}" role="timer">
+    <div class="what"><span>${paused ? T('Paused') : T('Timing')}</span><b>${esc(S.timer.item_name)}</b></div>
+    <span class="clock" id="clock">${clock(timerMs())}</span>
+    <button class="icon-btn" data-act="${paused ? 'timer-resume' : 'timer-pause'}" aria-label="${paused ? T('Resume') : T('Pause')}">${paused ? ICON.play : ICON.pause}</button>
     <button class="btn small" data-act="timer-stop">${T('Stop')}</button>
     <button class="icon-btn" data-act="timer-cancel" aria-label="${T('Discard timer')}">${ICON.x}</button>
   </div>`;
@@ -248,7 +365,48 @@ function viewSpin() {
         ${meter(b)}
       </div>
       ${streakCard()}
+      ${goalCard()}
     </section>`;
+}
+
+// --- Monthly goal: hours this month, as a ring
+function goalRing(pct, size = 46) {
+  const r = (size - 6) / 2, c = 2 * Math.PI * r;
+  return `<svg class="goal-ring" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="track"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="fill" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(1, pct))}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`;
+}
+function goalCard() {
+  const goal = S.user.monthlyGoal, done = S.score.monthMinutes || 0;
+  if (!goal) return '';
+  const pct = done / goal;
+  const d = new Date(now()), left = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate() + 1;
+  const line = pct >= 1 ? T('Goal reached. Everything from here is extra.')
+    : Tn(left, '{time} to go, last day of the month', '{time} to go, {n} days left', { time: hm(goal - done) });
+  return `<button class="goal surface ${pct >= 1 ? 'reached' : ''}" data-act="goal">
+    ${goalRing(pct)}<span class="main"><b>${T('{a} of {b} this month', { a: hm(done), b: hm(goal) })}</b><span class="muted small">${line}</span></span>
+    <span class="pct">${Math.min(999, Math.round(pct * 100))}%</span></button>`;
+}
+function goalSheet() {
+  const goal = S.user.monthlyGoal;
+  openSheet(`${sheetHead(T('Monthly goal'))}
+    <p class="muted">${T('How many hours do you want to spend on your own stuff each month? It’s just for you: it doesn’t change points or unlocks.')}</p>
+    <form class="stack" data-form="goal">
+      <div class="row"><input class="input" name="hours" type="number" inputmode="numeric" min="1" max="300" step="1" value="${goal ? Math.round(goal / 60) : 15}" aria-label="${T('Hours per month')}" style="width:110px"><span>${T('hours a month')}</span></div>
+      <div class="row wrap">${[5, 10, 15, 20, 30].map((h) => `<button type="button" class="btn small" data-act="goal-pick" data-v="${h}">${T('{h} h', { h })}</button>`).join('')}</div>
+      <p class="form-error"></p>
+      <button class="btn primary block">${T('Save goal')}</button>
+    </form>
+    ${goal ? `<button class="btn ghost block" data-act="goal-remove">${T('Remove goal')}</button>` : ''}`);
+}
+// Confetti once a month, the first time you see you've hit it.
+function checkGoal() {
+  if (!S || !S.user.monthlyGoal || !S.score) return;
+  const key = `goal-${S.score.monthStart}`;
+  if (S.score.monthMinutes >= S.user.monthlyGoal && !store.get(key, false)) {
+    store.set(key, true);
+    setTimeout(() => { FX.cannons(120); SFX.fanfare(); toast(T('Monthly goal reached: {time}!', { time: hm(S.user.monthlyGoal) })); }, 900);
+  }
 }
 
 function streakCard() {
@@ -258,10 +416,12 @@ function streakCard() {
     ? T('Do {m} min today to start a streak', { m: left })
     : sc.streakDoneToday
       ? (sc.nextMilestone ? Tn(sc.nextMilestone.days - sc.streak, '1 more day to the {days}-day bonus', '{n} more days to the {days}-day bonus', { days: sc.nextMilestone.days }) : T('Legendary streak'))
+      : sc.frozeYesterday ? T('A freeze saved your streak yesterday. Do {m} min today to keep it going', { m: left })
       : T('Do {m} min today to keep it going', { m: left });
+  const ice = sc.freezes ? `<span class="freeze-pill" title="${esc(Tn(sc.freezes, '1 streak freeze', '{n} streak freezes'))}">${ICON.snow}${sc.freezes}</span>` : '';
   return `<button class="streak surface ${sc.streak && !sc.streakDoneToday ? 'at-risk' : ''}" data-act="nav" data-v="friends">
     <span class="flame ${sc.streak ? 'lit' : ''}">${ICON.flame}</span>
-    <span class="main"><b>${sc.streak ? Tn(sc.streak, '1-day streak', '{n}-day streak') : T('No streak yet')}${sc.streakBonus ? ` <span class="pill">+${sc.streakBonus}%</span>` : ''}</b><span class="muted small">${line}</span></span>
+    <span class="main"><b>${sc.streak ? Tn(sc.streak, '1-day streak', '{n}-day streak') : T('No streak yet')}${sc.streakBonus ? ` <span class="pill">+${sc.streakBonus}%</span>` : ''}${ice}</b><span class="muted small">${line}</span></span>
     <span class="pts"><b>${nf.format(sc.week)}</b><span class="muted small">${T('points this week')}</span></span>
   </button>`;
 }
@@ -274,16 +434,29 @@ function kindPicker(name, current) {
 function itemRow(i) {
   const meta = i.archived
     ? T('{kind}, {time} logged', { kind: KINDS[i.kind], time: hrs(i.minutes) })
+    : snoozed(i) ? T('{kind}, snoozed until {date}', { kind: KINDS[i.kind], date: day(i.snoozed_until) })
     : `${KINDS[i.kind]}${i.steps_total ? T(', {done}/{total} steps', { done: i.steps_done, total: i.steps_total }) : ''}, ${ago(i.last_at)}, ${T('{n}% odds', { n: odds(i) })}`;
-  return `<li class="${i.id === freshId ? 'fresh' : ''}"><button class="item-row" data-act="item" data-id="${i.id}">
-    <span class="dot" style="background:${i.archived ? 'var(--surface-2)' : colorOf(i)}"></span>
+  return `<li class="${i.id === freshId ? 'fresh' : ''}" data-name="${esc(i.name.toLowerCase())}"><button class="item-row ${snoozed(i) ? 'snoozed' : ''}" data-act="item" data-id="${i.id}">
+    <span class="dot" style="background:${i.archived || snoozed(i) ? 'var(--surface-2)' : colorOf(i)}"></span>
     <span class="main"><span class="name">${esc(i.name)}</span><span class="meta">${meta}</span></span>
     <span class="hrs">${i.minutes ? hrs(i.minutes) : ''}</span>
     <span class="chev">${ICON.chev}</span>
   </button></li>`;
 }
+let stuffSort = store.get('stuffSort', 'neglected');
+const STUFF_SORTS = { neglected: 'Neglected', name: 'A–Z', time: 'Most time', added: 'Newest' };
+function sortStuff(list) {
+  const by = {
+    neglected: (a, b) => (a.last_at || 0) - (b.last_at || 0),
+    name: (a, b) => a.name.localeCompare(b.name, LOCALE),
+    time: (a, b) => b.minutes - a.minutes,
+    added: (a, b) => b.created_at - a.created_at,
+  }[stuffSort] || (() => 0);
+  return list.slice().sort((a, b) => (snoozed(a) - snoozed(b)) || by(a, b));
+}
 function viewStuff() {
-  const list = active();
+  const list = sortStuff(active());
+  const tools = list.length >= 6;
   const done = S.items.filter((i) => i.archived);
   return `
     <section class="section">
@@ -298,8 +471,14 @@ function viewStuff() {
     </section>
     <section class="section">
       <div class="section-head"><h2>${T('On the wheel')}</h2><span class="muted small">${Tn(list.length, '1 thing', '{n} things')}</span></div>
+      ${tools ? `<div class="stuff-tools">
+        <input class="input" id="stuff-search" type="search" placeholder="${T('Search your stuff')}" aria-label="${T('Search your stuff')}" autocomplete="off">
+        <div class="filters" role="group" aria-label="${T('Sort')}">${Object.entries(STUFF_SORTS).map(([k, l]) =>
+          `<button class="fchip" data-act="stuff-sort" data-v="${k}" aria-pressed="${k === stuffSort}">${T(l)}</button>`).join('')}</div>
+      </div>` : ''}
       ${list.length
-        ? `<ul class="list">${list.map(itemRow).join('')}</ul>
+        ? `<ul class="list" id="stuff-list">${list.map(itemRow).join('')}</ul>
+           <p class="muted" id="stuff-none" hidden>${T('Nothing matches that search.')}</p>
            <p class="hint">${T('Things you haven’t touched in a while get a bigger slice, up to three times bigger after four weeks.')}</p>`
         : `<p class="muted">${T('Nothing here yet. Start with whatever is gathering dust closest to you.')}</p>`}
     </section>
@@ -366,6 +545,39 @@ async function loadFriends(force = false) {
     if (view === 'friends' && $('#view')) { $('#view').innerHTML = viewFriends(); afterFriendsRender(); }
   } catch { /* shown on next try */ }
 }
+// --- Weekly challenge
+const CHALLENGE_TEXT = {
+  rediscover: ['Rediscover week', 'Most time on things you hadn’t touched for 2 weeks or more'],
+  variety: ['Variety week', 'Most different things, 15 minutes or more each'],
+  days: ['Every day counts', 'Most days with 15 minutes or more'],
+  focus: ['Deep focus week', 'Longest single session with the live timer'],
+  projects: ['Project week', 'Most time on projects'],
+  live: ['Timer week', 'Most time with the live timer'],
+};
+function challengeValue(c, v) {
+  if (c.unit === 'minutes') return hm(v);
+  return c.key === 'days' ? Tn(v, '1 day', '{n} days') : Tn(v, '1 thing', '{n} things');
+}
+function challengeCard() {
+  const c = F && F.challenge; if (!c) return '';
+  const [title, desc] = CHALLENGE_TEXT[c.key] || ['Weekly challenge', ''];
+  const daysLeft = Math.max(1, Math.ceil((c.ends - now()) / 86400000));
+  const solo = c.standings.length < 2;
+  const top = Math.max(1, ...c.standings.map((x) => x.value));
+  return `<section class="challenge surface">
+    <div class="challenge-head"><span class="trophy">${ICON.trophy}</span>
+      <div class="main"><span class="muted small">${T('This week’s challenge')}</span><b>${T(title)}</b></div>
+      <span class="muted small">${daysLeft === 1 ? T('ends today') : T('{n} days left', { n: daysLeft })}</span></div>
+    <p class="muted">${T(desc)}. ${T('The winner gets +{n} points.', { n: nf.format(c.points) })}</p>
+    ${solo ? `<p class="hint">${T('Add a friend to play: it’s you against your friends.')}</p>`
+      : !c.standings.some((x) => x.value) ? `<p class="hint">${T('Nobody’s on the board yet. Be the first.')}</p>`
+      : `<ol class="challenge-list">${c.standings.slice(0, 5).map((x, i) => `<li class="${x.you ? 'me' : ''}">
+          <span class="rank">${i + 1}</span><span class="name">${x.you ? T('You') : esc(x.username)}</span>
+          <span class="bar"><span style="width:${(x.value / top) * 100}%"></span></span><b>${esc(challengeValue(c, x.value))}</b></li>`).join('')}</ol>`}
+    ${c.wins ? `<p class="muted small">${Tn(c.wins, 'You’ve won 1 weekly challenge.', 'You’ve won {n} weekly challenges.')}</p>` : ''}
+  </section>`;
+}
+
 function viewFriends() {
   if (!F) return `<section class="surface pad"><p class="muted">${T('Loading the leaderboard…')}</p></section>`;
   const board = F.board[boardPeriod] || [];
@@ -384,9 +596,11 @@ function viewFriends() {
         <span><span class="flame ${sc.streak ? 'lit' : ''}">${ICON.flame}</span>${Tn(sc.streak, '<b>1</b> day streak', '<b>{n}</b> day streak')}</span>
         <span>${T('<b>{pct}</b> streak bonus', { pct: `+${sc.streakBonus || 0}%` })}</span>
         ${sc.nextMilestone ? `<span>${T('<b>+{points}</b> at {days} days', { points: nf.format(sc.nextMilestone.points), days: sc.nextMilestone.days })}</span>` : ''}
+        <span><span class="mini-ice">${ICON.snow}</span>${T('<b>{n}</b> of {max} freezes', { n: sc.freezes || 0, max: sc.freezeMax || 2 })}</span>
       </div>
     </section>
 
+    ${challengeCard()}
     ${F.incoming.length ? `<section class="section"><h2>${T('Friend requests')}</h2><ul class="list">${F.incoming.map((r) => `<li><div class="plain-row">
         ${avatar(r.username)}<div class="main"><div class="name">${esc(r.username)}</div><div class="muted small">${T('wants to be friends')}</div></div>
         <button class="btn small primary" data-act="friend-accept" data-name="${esc(r.username)}">${T('Accept')}</button>
@@ -395,14 +609,17 @@ function viewFriends() {
 
     <section class="section">
       <div class="seg" role="tablist" aria-label="${T('Leaderboard period')}">${PERIODS.map(([k, l]) => `<button role="tab" aria-selected="${k === boardPeriod}" data-act="board" data-v="${k}">${l}</button>`).join('')}</div>
-      ${hasFriends ? `<ol class="board">${board.map((e) => `<li>
+      ${hasFriends ? `<ol class="board">${board.map((e) => `<li class="${e.atRisk ? 'with-nudge' : ''}">
           <button class="board-row ${e.you ? 'me' : ''}" ${e.you ? 'disabled' : `data-act="friend" data-name="${esc(e.username)}"`}>
             <span class="rank r${e.rank}">${e.rank}</span>
             ${avatar(e.username)}
             <span class="main"><span class="name">${e.you ? T('You') : esc(e.username)}</span>
               <span class="muted small">${hm(e.minutes)}${e.streak ? ` <span class="mini-flame">${ICON.flame}</span>${e.streak}` : ''}</span></span>
             <b class="score">${nf.format(e.points)}</b>
-          </button></li>`).join('')}</ol>`
+          </button>
+          ${e.atRisk ? `<button class="nudge-btn" data-act="nudge" data-name="${esc(e.username)}" ${e.nudged ? 'disabled' : ''} aria-label="${esc(T('Nudge {name}: their streak needs today’s minutes', { name: e.username }))}">${ICON.bell}<span>${e.nudged ? T('Nudged') : T('Nudge')}</span></button>` : ''}
+          </li>`).join('')}</ol>
+        ${board.some((e) => e.atRisk && !e.nudged) ? `<p class="hint">${T('A bell means their streak still needs today’s 15 minutes. A nudge reminds them.')}</p>` : ''}`
       : `<div class="empty surface"><h2>${T('Better with friends')}</h2><p class="muted">${T('Add someone by their username and see who spends the most time on what they already own.')}</p></div>`}
     </section>
 
@@ -436,6 +653,7 @@ function viewFriends() {
           <li>${T('<b>Live timer</b>: +20% for timed sessions')}</li>
           <li>${T('<b>Focus</b>: +20% for an hour or more in one go, +40% for two')}</li>
         </ul>
+        <p>${T('<b>Streak freezes</b>: every 7 days in a row earns one, and you can hold 2. Miss a day and a freeze is used up for you, so the streak survives.')}</p>
         <p>${T('<b>Bonuses</b>: streak milestones at 3, 7, 14, 30, 60, 100 and 365 days, and 1,000 points for finishing a project you’ve put 2+ hours into.')}</p>
         <p class="muted small">${T('Fair play: up to 8 hours a day earn points, and time added more than 2 days later doesn’t.')}</p>
       </div>
@@ -612,6 +830,7 @@ function viewStats() {
   const byItem = S.items.filter((i) => i.minutes > 0).sort((a, z) => z.minutes - a.minutes).slice(0, 10);
   const top = byItem[0]?.minutes || 1;
   return `
+    ${S.user.monthlyGoal ? goalCard() : `<button class="version-btn" data-act="goal"><span class="main"><b>${T('Set a monthly goal')}</b><span class="muted small">${T('Pick how many hours you want each month')}</span></span><span class="chev">${ICON.chev}</span></button>`}
     <section class="tiles">
       <div class="tile surface"><div class="v">${round1(b.earnedMinutes / 60)}</div><div class="k">${T('hours total')}</div></div>
       <div class="tile surface"><div class="v">${round1(ws[ws.length - 1].minutes / 60)}</div><div class="k">${T('hours this week')}</div></div>
@@ -642,11 +861,7 @@ function viewStats() {
 
     <section class="section">
       <h2>${T('Recent sessions')}</h2>
-      ${S.logs.length ? `<ul class="list">${S.logs.slice(0, 20).map((l) => `<li><div class="plain-row">
-          <div class="main"><div class="name">${esc(l.item_name)}</div><div class="muted small">${day(l.ended_at)}, ${l.source === 'timer' ? T('timed') : T('added by hand')}</div></div>
-          <span class="sess"><b>${hm(l.minutes)}</b>${l.points ? `<span class="muted small">${T('+{n} pts', { n: nf.format(l.points) })}</span>` : ''}</span>
-          <button class="icon-btn" data-act="log-del" data-id="${l.id}" aria-label="${T('Delete this session')}">${ICON.x}</button>
-        </div></li>`).join('')}</ul>`
+      ${S.logs.length ? `<ul class="list">${S.logs.slice(0, 20).map((l) => sessionRow(l, true)).join('')}</ul>`
       : `<p class="muted">${T('No sessions yet. Spin the wheel and start a timer.')}</p>`}
     </section>`;
 }
@@ -691,6 +906,21 @@ function renderAuth(mode, error = '') {
       </div>
     </main>`;
   $('#u').focus();
+}
+
+// Home screen shortcuts (long-press the icon on Android): /?go=spin, /?go=continue, /?go=log
+function shortcut() {
+  const go = new URLSearchParams(location.search).get('go');
+  if (!go) return;
+  history.replaceState(null, '', '/');
+  if (go === 'spin') { view = 'spin'; render(); setTimeout(() => $('#hub')?.click(), 400); }
+  else if (go === 'log') logSheet(S.logs[0]?.item_id);
+  else if (go === 'continue') {
+    const last = S.logs.find((l) => S.items.some((i) => i.id === l.item_id && !i.archived));
+    if (S.timer) toast(T('Your timer is already running'));
+    else if (last) api('POST', '/api/timer/start', { itemId: last.item_id }).then(() => { SFX.start(); toast(T('Timer started on {name}', { name: last.item_name })); }).catch((e) => toast(e.message));
+    else toast(T('Spin the wheel first, then you can continue from here'));
+  }
 }
 
 // --- Language
@@ -1186,6 +1416,8 @@ function logSheet(itemId) {
       </div>
       <div class="field"><label for="log-date">${T('When')}</label>
         <input class="input" id="log-date" name="date" type="date" value="${iso(today)}" max="${iso(today)}"></div>
+      <div class="field"><label for="log-note">${T('Note')} <span class="muted">${T('(optional)')}</span></label>
+        <input class="input" id="log-note" name="note" maxlength="200" placeholder="${T('What did you get done?')}" autocomplete="off"></div>
       <p class="form-error"></p>
       <button class="btn primary block">${T('Log time')}</button>
     </form>`);
@@ -1198,7 +1430,11 @@ function itemSheet(id) {
     <p class="muted">${Tn(i.sessions, '{time} over 1 session', '{time} over {n} sessions', { time: hrs(i.minutes) })}, ${ago(i.last_at)}.${i.archived ? '' : ` ${T('{n}% chance on the next spin.', { n: odds(i) })}`}</p>
     ${i.archived ? '' : `<div class="sheet-actions">
       <button class="btn primary" data-act="timer-start" data-id="${i.id}">${S.timer ? T('Switch timer to this') : T('Start timer')}</button>
-      <button class="btn" data-act="log" data-id="${i.id}">${T('Log time')}</button></div>`}
+      <button class="btn" data-act="log" data-id="${i.id}">${T('Log time')}</button></div>
+      ${snoozed(i)
+        ? `<p class="snooze-note">${T('Snoozed until {date}, so it’s off the wheel for now.', { date: esc(day(i.snoozed_until)) })} <button class="auth-switch" data-act="snooze" data-id="${i.id}" data-v="0">${T('Put it back now')}</button></p>`
+        : `<button class="btn ghost" data-act="snooze" data-id="${i.id}" data-v="7">${ICON.moon}${T('Not this week')}</button>`}`}
+    ${diary(i.id)}
     ${i.kind === 'project' && !i.archived ? `<section class="steps" id="steps" data-item="${i.id}"><p class="hint">${T('Loading steps…')}</p></section>` : ''}
     <form class="stack" data-form="edit-item" data-id="${i.id}">
       <div class="field"><label for="ename">${T('Name')}</label><input class="input" id="ename" name="name" value="${esc(i.name)}" maxlength="60" required></div>
@@ -1243,6 +1479,54 @@ function renderSteps(itemId, steps) {
     </form>`;
 }
 
+// --- Sessions: a row, the per-item diary, and editing one
+function sessionRow(l, withItem) {
+  return `<li><button class="plain-row session-row" data-act="log-edit" data-id="${l.id}">
+      <span class="main"><span class="name">${withItem ? esc(l.item_name) : esc(day(l.ended_at))}</span>
+        <span class="muted small">${withItem ? `${esc(day(l.ended_at))}, ` : ''}${l.source === 'timer' ? T('timed') : T('added by hand')}${l.edited ? T(', edited') : ''}</span>
+        ${l.note ? `<span class="session-note">${esc(l.note)}</span>` : ''}</span>
+      <span class="sess"><b>${hm(l.minutes)}</b>${l.points ? `<span class="muted small">${T('+{n} pts', { n: nf.format(l.points) })}</span>` : ''}</span>
+    </button></li>`;
+}
+function diary(itemId) {
+  const logs = S.logs.filter((l) => l.item_id === itemId).slice(0, 8);
+  if (!logs.length) return '';
+  return `<section class="stack" style="gap:8px"><h3>${T('Sessions')}</h3><ul class="list">${logs.map((l) => sessionRow(l, false)).join('')}</ul>
+    ${logs.some((l) => l.note) ? '' : `<p class="hint">${T('Tap a session to add a note, like what you got done.')}</p>`}</section>`;
+}
+function editLogSheet(id) {
+  const l = S.logs.find((x) => x.id === id); if (!l) return;
+  openSheet(`${sheetHead(esc(l.item_name))}
+    <p class="muted">${esc(day(l.ended_at))}, ${l.source === 'timer' ? T('timed') : T('added by hand')}${l.points ? `, ${T('+{n} pts', { n: nf.format(l.points) })}` : ''}</p>
+    <form class="stack" data-form="log-edit" data-id="${l.id}">
+      <div class="field"><label>${T('How long')}</label>
+        <div class="row">
+          <input class="input" name="h" type="number" inputmode="numeric" min="0" max="24" value="${Math.floor(l.minutes / 60)}" aria-label="${T('Hours')}" style="width:90px"><span>${T('h')}</span>
+          <input class="input" name="m" type="number" inputmode="numeric" min="0" max="59" value="${l.minutes % 60}" aria-label="${T('Minutes')}" style="width:90px"><span>min</span>
+        </div>
+        ${l.source === 'timer' ? `<span class="hint">${T('Making a timed session longer counts it as added by hand.')}</span>` : ''}</div>
+      <div class="field"><label for="lnote">${T('Note')}</label>
+        <textarea class="input" id="lnote" name="note" maxlength="200" rows="2" placeholder="${T('What did you get done?')}">${esc(l.note || '')}</textarea></div>
+      <p class="form-error"></p>
+      <button class="btn primary block">${T('Save changes')}</button>
+    </form>
+    <button class="btn danger block" data-act="log-del" data-id="${l.id}">${T('Delete this session')}</button>`);
+}
+
+// --- Undo: deleting a session, wish or step happens after a few seconds, unless you tap Undo.
+const pendingDeletes = new Map();
+function deleteWithUndo(key, url, hideLocally, message, onUndo = refresh) {
+  hideLocally(); render(); SFX.thud();
+  const run = () => { pendingDeletes.delete(key); return api('DELETE', url).then((st) => { if (st && st.items) setState(st); }).catch((e) => { toast(e.message); refresh(); }); };
+  const t = setTimeout(run, 5000);
+  pendingDeletes.set(key, { t, url });
+  toast(message, { label: T('Undo'), fn: () => { clearTimeout(t); pendingDeletes.delete(key); onUndo(); } });
+}
+// Leaving the page doesn't cancel a delete you already confirmed.
+addEventListener('pagehide', () => {
+  for (const [key, p] of pendingDeletes) { clearTimeout(p.t); pendingDeletes.delete(key); fetch(p.url, { method: 'DELETE', keepalive: true, credentials: 'same-origin' }).catch(() => {}); }
+});
+
 function confirmSheet(title, text, label, onYes, danger = true) {
   openSheet(`${sheetHead(title)}<p>${text}</p>
     <div class="sheet-actions"><button class="btn" data-act="close">${T('Cancel')}</button>
@@ -1266,11 +1550,11 @@ let timerInt = null;
 function tickTimer() {
   clearInterval(timerInt);
   if (!S || !S.timer) return;
-  const upd = () => { const el = $('#clock'); if (el && S.timer) el.textContent = clock(now() - S.timer.started_at); };
+  const upd = () => { const el = $('#clock'); if (el && S.timer) el.textContent = clock(timerMs()); };
   upd(); timerInt = setInterval(upd, 1000);
 }
 async function stopTimer() {
-  const elapsed = Math.round((now() - S.timer.started_at) / 60000);
+  const elapsed = Math.round(timerMs() / 60000);
   if (elapsed >= 180) {
     openSheet(`${sheetHead(T('That was a long one'))}
       <p>${T('The timer ran for <b>{time}</b> on {name}. Forgot to stop it? Keep only the real part.', { time: hm(elapsed), name: esc(S.timer.item_name) })}</p>
@@ -1289,6 +1573,7 @@ async function stopTimer() {
 function afterLog(r) {
   closeSheet();
   if (r.logged < 1) { toast(T('Under a minute, so nothing logged.')); return; }
+  if (r.offline) { toast(T('Logged {time}. Points are added when you’re back online.', { time: hm(r.logged) })); SFX.coin(); return; }
   if (r.earned && r.earned.total > 0) { pointsReveal(r); return; }
   toast(r.earned && r.earned.note ? T('Logged {time}. {note}.', { time: hm(r.logged), note: TS(r.earned.note) }) : T('Logged {time}. Nice.', { time: hm(r.logged) }));
   if (!r.newUnlocks) { SFX.coin(); buzz(15); floatText($('.bankpill'), `+${hm(r.logged)}`); }
@@ -1310,7 +1595,8 @@ function pointsReveal(r) {
       ${e.multiplier > 1 ? `<span class="pr-mult" id="pr-mult">×${new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 2 }).format(e.multiplier)}</span>` : ''}</div>
     <ul class="pr-list">${rows.join('')}</ul>
     ${e.note ? `<p class="hint">${esc(TS(e.note))}.</p>` : ''}
-    <button class="btn primary block" data-act="points-done" data-unlocks="${r.newUnlocks || 0}">${r.newUnlocks ? T('Nice. And there’s more…') : T('Nice')}</button>`);
+    ${e.logId ? `<input class="input" id="pr-note" maxlength="200" placeholder="${T('Add a note: what did you get done?')}" aria-label="${T('Note')}" autocomplete="off">` : ''}
+    <button class="btn primary block" data-act="points-done" data-log="${e.logId || ''}" data-unlocks="${r.newUnlocks || 0}">${r.newUnlocks ? T('Nice. And there’s more…') : T('Nice')}</button>`);
   const steps = rows.length;
   rows.forEach((_, i) => setTimeout(() => { if (sheet.open) { SFX.tick(); buzz(5); } }, 250 + i * 260));
   const el = $('#pr-num', sheet);
@@ -1336,9 +1622,17 @@ function pointsReveal(r) {
 
 // ---------- toast & confetti ----------
 let toastT = null;
-function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800);
+function toast(msg, action) {
+  const t = $('#toast'); t.textContent = msg;
+  try { if (t.matches(':popover-open')) t.hidePopover(); t.showPopover(); } catch { /* no popover support */ }
+  requestAnimationFrame(() => t.classList.add('show'));
+  t.classList.toggle('has-action', !!action);
+  if (action) {
+    const b = document.createElement('button'); b.className = 'toast-action'; b.textContent = action.label;
+    b.addEventListener('click', () => { t.classList.remove('show'); action.fn(); }, { once: true });
+    t.append(b);
+  }
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), action ? 5000 : 2800);
 }
 // ---------- particles ----------
 const FX = (() => {
@@ -1478,7 +1772,11 @@ document.addEventListener('click', async (e) => {
         confirmSheet(T('Delete this?'), T('{name} and its {time} of logged time will be gone for good.', { name: esc(i.name), time: hrs(i.minutes) }), T('Delete'), async () => { await api('DELETE', `/api/items/${id}`); SFX.thud(); });
         break;
       }
-      case 'wish-del': await api('DELETE', `/api/wishes/${id}`); SFX.thud(); break;
+      case 'wish-del': {
+        const w = S.wishes.find((x) => x.id === id);
+        deleteWithUndo(`wish-${id}`, `/api/wishes/${id}`, () => { S.wishes = S.wishes.filter((x) => x.id !== id); }, T('{name} removed', { name: w ? w.name : '' }));
+        break;
+      }
       case 'buy': {
         const w = S.wishes.find((x) => x.id === id);
         confirmSheet(T('Buy it?'), `${T('This uses one unlock on <b>{name}</b>', { name: esc(w.name) })}${w.price != null ? ` (${money(w.price)})` : ''}.`, T('Yes, I’m buying it'), async () => {
@@ -1494,7 +1792,29 @@ document.addEventListener('click', async (e) => {
       case 'purchase-del':
         confirmSheet(T('Undo this purchase?'), T('You’ll get the unlock back. Use this if you returned it or logged it by mistake.'), T('Undo purchase'), async () => { await api('DELETE', `/api/purchases/${id}`); SFX.thud(); }, false);
         break;
-      case 'log-del': await api('DELETE', `/api/logs/${id}`); SFX.thud(); toast(T('Session deleted')); break;
+      case 'log-del':
+        closeSheet();
+        deleteWithUndo(`log-${id}`, `/api/logs/${id}`, () => { S.logs = S.logs.filter((x) => x.id !== id); }, T('Session deleted'));
+        break;
+      case 'log-edit': editLogSheet(id); break;
+      case 'goal': goalSheet(); break;
+      case 'nudge':
+        F = await api('POST', '/api/nudge', { username: el.dataset.name });
+        SFX.pop(); buzz(10); toast(T('Nudge sent to {name}', { name: el.dataset.name }));
+        if (view === 'friends') $('#view').innerHTML = viewFriends();
+        break;
+      case 'goal-pick': { const i = sheet.querySelector('input[name="hours"]'); if (i) i.value = el.dataset.v; break; }
+      case 'goal-remove': await api('PATCH', '/api/settings', { monthlyGoalHours: 0 }); closeSheet(); toast(T('Goal removed')); break;
+      case 'timer-pause': case 'timer-resume':
+        await api('POST', `/api/timer/${act === 'timer-pause' ? 'pause' : 'resume'}`, { at: now() }); SFX.click(); buzz(8);
+        break;
+      case 'snooze': {
+        const days = Number(el.dataset.v);
+        await api('PATCH', `/api/items/${id}`, { snoozeDays: days }); closeSheet();
+        toast(days ? T('Off the wheel until {date}', { date: day(Date.now() + days * 86400000) }) : T('Back on the wheel'));
+        break;
+      }
+      case 'stuff-sort': stuffSort = el.dataset.v; store.set('stuffSort', stuffSort); render(); break;
       case 'week': {
         selectedWeek = Number(el.dataset.i); SFX.click(); render(); break;
       }
@@ -1520,8 +1840,9 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'step-del': {
-        const r = await api('DELETE', `/api/steps/${id}`);
-        renderSteps(Number($('#steps', sheet)?.dataset.item), r.steps); SFX.thud(); break;
+        const itemId = Number($('#steps', sheet)?.dataset.item);
+        deleteWithUndo(`step-${id}`, `/api/steps/${id}`, () => el.closest('li')?.remove(), T('Step deleted'), () => loadSteps(itemId));
+        break;
       }
       case 'high-five': {
         F = await api('POST', '/api/high-five', { eventId: id });
@@ -1554,7 +1875,13 @@ document.addEventListener('click', async (e) => {
         });
         break;
       }
-      case 'points-done': { const u = Number(el.dataset.unlocks); closeSheet(); if (u) setTimeout(() => celebrate(u), 150); break; }
+      case 'points-done': {
+        const u = Number(el.dataset.unlocks), text = $('#pr-note', sheet)?.value.trim();
+        closeSheet();
+        if (text && el.dataset.log) api('PATCH', `/api/logs/${el.dataset.log}`, { note: text }).catch((err) => toast(err.message));
+        if (u) setTimeout(() => celebrate(u), 150);
+        break;
+      }
       case 'session-revoke': await api('POST', '/api/sessions/revoke', { id: el.dataset.id }); SFX.thud(); loadDevices(); break;
       case 'sessions-others':
         confirmSheet(T('Sign out other devices?'), T('Every device except this one will need to sign in again.'), T('Sign them out'), async () => {
@@ -1594,7 +1921,7 @@ document.addEventListener('click', async (e) => {
               <span class="hint">${T('At least {n} characters. A few random words works well. Other devices get signed out.', { n: config.passwordMin || 10 })}</span></div>
             <p class="form-error"></p><button class="btn primary block">${T('Change password')}</button></form>`);
         break;
-      case 'logout': await api('POST', '/api/logout'); S = null; closeSheet(); renderAuth('login'); break;
+      case 'logout': await api('POST', '/api/logout'); forgetDevice(); S = null; closeSheet(); renderAuth('login'); break;
       case 'account-del':
         openSheet(`${sheetHead(T('Delete your account?'))}
           <p>${T('This deletes your stuff, hours, wishlist and purchases. It can’t be undone. Export your data first if you want a copy.')}</p>
@@ -1608,6 +1935,14 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+// My stuff: search filters the rows in place, so the keyboard stays open
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'stuff-search') return;
+  const q = e.target.value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('#stuff-list > li').forEach((li) => { const hit = !q || li.dataset.name.includes(q); li.hidden = !hit; shown += hit; });
+  const none = $('#stuff-none'); if (none) none.hidden = shown > 0;
+});
 document.addEventListener('submit', async (e) => {
   const f = e.target.closest('form[data-form]');
   if (!f) return;
@@ -1656,13 +1991,27 @@ document.addEventListener('submit', async (e) => {
         const date = y ? new Date(y, mo - 1, d) : new Date();
         const isToday = date.toDateString() === new Date().toDateString();
         const endedAt = isToday ? undefined : new Date(y, mo - 1, d, 20, 0).getTime();
-        const r = await api('POST', '/api/logs', { itemId: Number(formVal(f, 'itemId')), minutes, endedAt });
+        const r = await api('POST', '/api/logs', { itemId: Number(formVal(f, 'itemId')), minutes, endedAt, note: formVal(f, 'note') || undefined });
         afterLog(r);
         break;
       }
       case 'stop-adjust': {
         const r = await api('POST', '/api/timer/stop', { minutes: minutesFrom(f) });
         afterLog(r);
+        break;
+      }
+      case 'goal': {
+        const h = Number(formVal(f, 'hours'));
+        if (!(h >= 1 && h <= 300)) throw new Error(T('Pick between 1 and 300 hours'));
+        await api('PATCH', '/api/settings', { monthlyGoalHours: h });
+        closeSheet(); SFX.pop(); toast(T('Goal set: {h} h a month', { h }));
+        break;
+      }
+      case 'log-edit': {
+        const minutes = minutesFrom(f);
+        if (minutes < 1) throw new Error(T('Add at least 1 minute'));
+        await api('PATCH', `/api/logs/${f.dataset.id}`, { minutes, note: formVal(f, 'note') });
+        closeSheet(); SFX.pop(); toast(T('Saved'));
         break;
       }
       case 'add-friend': {
@@ -1697,7 +2046,7 @@ document.addEventListener('submit', async (e) => {
         break;
       case 'account-del':
         await api('POST', '/api/account/delete', { password: formVal(f, 'password') });
-        closeSheet(); S = null; store.set('hadAccount', false); renderAuth('register', T('Your account is deleted.'));
+        closeSheet(); forgetDevice(); S = null; store.set('hadAccount', false); renderAuth('register', T('Your account is deleted.'));
         break;
     }
   } catch (err) {
@@ -1718,7 +2067,8 @@ document.addEventListener('visibilitychange', async () => {
     if (config.version && c.version && c.version !== config.version) { location.reload(); return; }
     config = c;
   } catch { /* offline */ }
-  api('GET', '/api/state').catch(() => {});
+  await flushQueue();
+  api('GET', '/api/state').then(() => setOffline(!!queue().length)).catch(() => {});
   if (view === 'friends') loadFriends(true);
 });
 let resizeT = null;
@@ -1728,11 +2078,17 @@ document.fonts?.ready.then(() => { if (S && view === 'spin') drawWheel(); });
 // ---------- boot ----------
 (async () => {
   try { config = await (await fetch('/api/config')).json(); } catch { /* defaults */ }
-  try { await api('GET', '/api/state'); } catch { if (!S) renderAuth(); }
+  try { await api('GET', '/api/state'); } catch (e) {
+    const cached = e.network && store.get('lastState', null);
+    if (!S && cached) { setState(cached); setOffline(true); } else if (!S) renderAuth();
+  }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(PAGE_VERSION)}`).catch(() => {});
   if (S) {
+    flushQueue();
     store.set('hadAccount', true);
     // coming back from a language switch in Settings
     if (store.get('reopen', null) === 'settings') { store.set('reopen', null); settingsSheet(); }
+    shortcut();
     announceUpdate();
     const ws = S.score && S.score.weekStart; const prev = ws && new Date(ws); if (prev) prev.setDate(prev.getDate() - 7);
     if (prev && !store.get(`recap.${prev.getTime()}`, false) && S.logs.length) enqueue(() => recapSheet(true));

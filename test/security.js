@@ -534,6 +534,104 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.deepEqual((await req('GET', '/api/changelog?lang=<script>')).json.versions, en.versions);
   });
 
+  console.log('\n1.2: sessions, timers, snoozing, goals, nudges and challenges');
+  let gItem;
+  await check('editing a session: only your own, notes are limited, points are worked out again', async () => {
+    const st = (await post('/api/items', { name: 'Bass' }, { cookie: f2 })).json;
+    gItem = st.items.find((i) => i.name === 'Bass').id;
+    const r = await post('/api/logs', { itemId: gItem, minutes: 30, endedAt: Date.now() - 86400000, note: 'scales' }, { cookie: f2 });
+    assert.equal(r.status, 200, r.text);
+    const log = r.json.logs.find((l) => l.item_id === gItem);
+    assert.equal(log.note, 'scales');
+    assert.equal((await req('PATCH', `/api/logs/${log.id}`, { body: { note: 'hacked' }, cookie: f1 })).status, 404, 'edited someone else’s session');
+    assert.equal((await req('PATCH', `/api/logs/${log.id}`, { body: { note: 'x'.repeat(201) }, cookie: f2 })).status, 400);
+    assert.equal((await req('PATCH', `/api/logs/${log.id}`, { body: { minutes: 0 }, cookie: f2 })).status, 400);
+    assert.equal((await req('PATCH', `/api/logs/${log.id}`, { body: { minutes: 1441 }, cookie: f2 })).status, 400);
+    assert.equal((await post('/api/logs', { itemId: gItem, minutes: 5, note: 'y'.repeat(201) }, { cookie: f2 })).status, 400);
+    const e = await req('PATCH', `/api/logs/${log.id}`, { body: { minutes: 60, note: 'scales and a song' }, cookie: f2 });
+    assert.equal(e.status, 200, e.text);
+    const after = e.json.logs.find((l) => l.id === log.id);
+    assert.equal(after.minutes, 60); assert.equal(after.note, 'scales and a song'); assert.equal(after.edited, 1);
+    assert.ok(after.points > log.points, `points not worked out again (${log.points} → ${after.points})`);
+  });
+  await check('timers: paused time doesn’t count, and offline times can’t reach back more than 12 hours', async () => {
+    let r = await post('/api/timer/start', { itemId: gItem, startedAt: Date.now() - 3 * 86400000 }, { cookie: f2 });
+    assert.equal(r.status, 200, r.text);
+    const t = r.json.timer;
+    assert.ok(t.started_at >= Date.now() - 12 * 3600000 - 5000, 'timer backdated by days');
+    assert.equal((await post('/api/timer/pause', {}, { cookie: f1 })).status, 400, 'paused a timer that isn’t yours');
+    r = await post('/api/timer/pause', { at: t.started_at + 60000 }, { cookie: f2 });
+    assert.ok(r.json.timer.paused_at > 0);
+    r = await post('/api/timer/stop', { endedAt: Date.now() + 86400000 }, { cookie: f2 });
+    assert.equal(r.json.logged, 1, `logged ${r.json.logged} minutes for a timer paused after 1`);
+    r = await post('/api/timer/start', { itemId: gItem, startedAt: 'yesterday' }, { cookie: f2 });
+    assert.equal(r.status, 400);
+  });
+  await check('snoozing: 0 to 30 days, your own things only', async () => {
+    assert.equal((await req('PATCH', `/api/items/${gItem}`, { body: { snoozeDays: 31 }, cookie: f2 })).status, 400);
+    assert.equal((await req('PATCH', `/api/items/${gItem}`, { body: { snoozeDays: 7 }, cookie: f1 })).status, 404);
+    const r = await req('PATCH', `/api/items/${gItem}`, { body: { snoozeDays: 7 }, cookie: f2 });
+    assert.ok(r.json.items.find((i) => i.id === gItem).snoozed_until > Date.now() + 6 * 86400000);
+    const back = await req('PATCH', `/api/items/${gItem}`, { body: { snoozeDays: 0 }, cookie: f2 });
+    assert.equal(back.json.items.find((i) => i.id === gItem).snoozed_until, 0);
+  });
+  await check('monthly goal: 0 to 300 hours', async () => {
+    for (const v of [-1, 301, 'lots']) assert.equal((await req('PATCH', '/api/settings', { body: { monthlyGoalHours: v }, cookie: f2 })).status, 400, `goal ${v}`);
+    const r = await req('PATCH', '/api/settings', { body: { monthlyGoalHours: 15 }, cookie: f2 });
+    assert.equal(r.json.user.monthlyGoal, 900);
+    assert.ok(r.json.score.monthMinutes >= 61);
+  });
+  await check('nudges: friends only, only when their streak is at risk, once a day', async () => {
+    assert.equal((await post('/api/nudge', { username: 'gus' }, { cookie: f3 })).status, 403, 'nudged a stranger');
+    assert.equal((await post('/api/nudge', { username: 'nobody-at-all' }, { cookie: f1 })).status, 404);
+    // put gus's sessions from today on yesterday: his streak now needs today's minutes
+    {
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(path.join(DATA, 'bored.db')); db.exec('PRAGMA busy_timeout = 3000');
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      db.prepare("UPDATE time_logs SET ended_at = ? WHERE ended_at >= ? AND user_id = (SELECT id FROM users WHERE username = 'gus')").run(today.getTime() - 3600000, today.getTime());
+      db.close();
+    }
+    const g = (await req('GET', '/api/friends', { cookie: f1 })).json.board.week.find((e) => e.username === 'gus');
+    assert.equal(g.atRisk, true, JSON.stringify(g));
+    assert.equal((await post('/api/nudge', { username: 'gus' }, { cookie: f1 })).status, 200);
+    assert.equal((await post('/api/nudge', { username: 'gus' }, { cookie: f1 })).status, 409);
+    let st = (await req('GET', '/api/state', { cookie: f2 })).json;
+    assert.deepEqual(st.nudges.map((n) => n.from), ['fiona']);
+    await post('/api/nudges/seen', {}, { cookie: f2 });
+    assert.equal((await req('GET', '/api/state', { cookie: f2 })).json.nudges.length, 0);
+    assert.equal((await post('/api/nudge', { username: 'fiona' }, { cookie: f2 })).status, 400, 'nudged someone without a streak');
+    assert.equal((await req('GET', '/api/state', { cookie: f1 })).json.nudges.length, 0);
+  });
+  await check('weekly challenge: just you and your friends, and last week’s winner gets 500 points once', async () => {
+    const v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    assert.ok(v.challenge && v.challenge.key);
+    assert.deepEqual(v.challenge.standings.map((x) => x.username).sort(), ['fiona', 'gus']);
+    assert.deepEqual((await req('GET', '/api/friends', { cookie: f3 })).json.challenge.standings.map((x) => x.username), ['hana']);
+    // a session for gus last week that fits every kind of challenge
+    const proj = (await post('/api/items', { name: 'Shed', kind: 'project' }, { cookie: f2 })).json.items.find((i) => i.name === 'Shed').id;
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(path.join(DATA, 'bored.db'));
+    db.exec('PRAGMA busy_timeout = 3000');
+    const lastWeek = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 4); return d.getTime(); })();
+    db.prepare(`INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source, points, scored_minutes, multiplier, bonuses, created_at)
+      SELECT id, ?, 120, ?, 'timer', 1000, 120, 1, '[{"key":"rediscovered","pct":50}]', ? FROM users WHERE username = 'gus'`).run(proj, lastWeek, lastWeek);
+    db.close();
+    await stop(); await start();   // the server only checks last week once per run
+    await req('GET', '/api/state', { cookie: f2 }); await req('GET', '/api/state', { cookie: f2 });
+    const gus = (await req('GET', '/api/friends', { cookie: f2 })).json;
+    assert.equal(gus.challenge.wins, 1, 'challenge win missing or paid twice');
+    assert.ok(gus.feed.some((e) => e.you && e.text === 'won the weekly challenge'));
+    assert.equal((await req('GET', '/api/friends', { cookie: f1 })).json.challenge.wins, 0, 'fiona won with nothing');
+  });
+  await check('the offline helper is served from the site root and allowed by the security policy', async () => {
+    const r = await req('GET', '/sw.js?v=test');
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-type'], /javascript/);
+    assert.match(r.headers['content-security-policy'], /worker-src 'self'/);
+    assert.doesNotMatch(r.text, /\/api\/.*cache\.put/);
+  });
+
   console.log('\nStorage');
   await check('database files are private to the app user', async () => {
     const mode = fs.statSync(path.join(DATA, 'bored.db')).mode & 0o777;

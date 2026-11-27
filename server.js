@@ -8,7 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { DatabaseSync } = require('node:sqlite');
-const { scoring } = require('./score');
+const { scoring, dayKey } = require('./score');
 const { achievements } = require('./achievements');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -168,6 +168,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS high_fives (
 for (const col of ['quick', 'chill']) {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('items') WHERE name = ?").get(col)) db.exec(`ALTER TABLE items ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
 }
+// 1.2: pause, snooze, notes, monthly goal, nudges
+for (const [t, col, def] of [['timers', 'paused_at', 'INTEGER NOT NULL DEFAULT 0'], ['timers', 'paused_ms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['items', 'snoozed_until', 'INTEGER NOT NULL DEFAULT 0'], ['time_logs', 'note', "TEXT NOT NULL DEFAULT ''"],
+  ['time_logs', 'edited', 'INTEGER NOT NULL DEFAULT 0'], ['users', 'monthly_goal', 'INTEGER NOT NULL DEFAULT 0']]) {
+  if (!hasColumn(t, col)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${col} ${def}`);
+}
+db.exec(`CREATE TABLE IF NOT EXISTS nudges (
+  from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  seen INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (from_id, to_id, day)
+); CREATE INDEX IF NOT EXISTS idx_nudges_to ON nudges(to_id, seen);`);
 const ach = achievements(db, score);
 const tx = (fn) => {
   db.exec('BEGIN IMMEDIATE');
@@ -504,7 +518,7 @@ function currentSession(req) {
   const token = tokenFrom(req);
   if (!token || token.length > 100) return null;
   const hash = sha256(token);
-  const row = q(`SELECT u.id, u.username, u.hours_per_unlock, u.is_admin, s.expires_at, s.last_seen, s.sid
+  const row = q(`SELECT u.id, u.username, u.hours_per_unlock, u.is_admin, u.monthly_goal, s.expires_at, s.last_seen, s.sid
                  FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(hash);
   if (!row) return null;
   const now = Date.now();
@@ -550,20 +564,21 @@ function ownItem(user, itemId) {
   return item;
 }
 // Saves a session with its points; returns what was earned, for the app to celebrate.
-function addLog(user, item, minutes, endedAt, source, fromSpin = false) {
+function addLog(user, item, minutes, endedAt, source, fromSpin = false, note = '') {
   if (q('SELECT COUNT(*) AS n FROM time_logs WHERE user_id = ?').get(user.id).n >= 20_000) bad('You’ve reached the maximum number of sessions');
   const now = Date.now();
   const e = score.scoreSession({ userId: user.id, item, minutes, endedAt, source, fromSpin, now });
-  q(`INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source, points, scored_minutes, multiplier, bonuses, created_at, from_spin)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(user.id, item.id, minutes, endedAt, source, e.points, e.scoredMinutes, e.multiplier, JSON.stringify(e.bonuses), now, fromSpin ? 1 : 0);
+  const r = q(`INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source, points, scored_minutes, multiplier, bonuses, created_at, from_spin, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(user.id, item.id, minutes, endedAt, source, e.points, e.scoredMinutes, e.multiplier, JSON.stringify(e.bonuses), now, fromSpin ? 1 : 0, note);
   const milestone = score.milestone(user.id, endedAt, now);
-  return { ...e, minutes, base: e.scoredMinutes * 10, milestone, total: e.points + (milestone ? milestone.points : 0) };
+  return { ...e, logId: Number(r.lastInsertRowid), minutes, base: e.scoredMinutes * 10, milestone, total: e.points + (milestone ? milestone.points : 0) };
 }
 function fmtH(min) { return `${Math.round((min / 60) * 10) / 10} h`; }
 
 function buildState(user) {
-  const items = q(`SELECT i.id, i.name, i.kind, i.archived, i.created_at, i.quick, i.chill,
+  awardChallenge(user);
+  const items = q(`SELECT i.id, i.name, i.kind, i.archived, i.created_at, i.quick, i.chill, i.snoozed_until,
                      COALESCE(SUM(l.minutes), 0) AS minutes, MAX(l.ended_at) AS last_at, COUNT(l.id) AS sessions,
                      (SELECT COUNT(*) FROM project_steps s WHERE s.item_id = i.id) AS steps_total,
                      (SELECT COUNT(*) FROM project_steps s WHERE s.item_id = i.id AND s.done_at IS NOT NULL) AS steps_done,
@@ -580,6 +595,7 @@ function buildState(user) {
       username: user.username,
       hoursPerUnlock: user.hours_per_unlock,
       isAdmin: !!user.is_admin,
+      monthlyGoal: user.monthly_goal,
       ...(user.is_admin ? { userCount: userCount() } : {}),
     },
     items,
@@ -589,7 +605,9 @@ function buildState(user) {
                   JOIN score_events e ON e.id = h.event_id JOIN users u ON u.id = h.from_id
                   WHERE e.user_id = ? AND h.seen = 0 ORDER BY h.created_at DESC LIMIT 10`).all(user.id)
       .map((h) => ({ from: h.from, text: momentText(h.kind, true), at: h.at })),
-    timer: q(`SELECT t.item_id, t.started_at, t.from_spin, i.name AS item_name FROM timers t
+    nudges: q(`SELECT u.username AS "from", n.created_at AS at FROM nudges n JOIN users u ON u.id = n.from_id
+               WHERE n.to_id = ? AND n.seen = 0 ORDER BY n.created_at DESC LIMIT 10`).all(user.id),
+    timer: q(`SELECT t.item_id, t.started_at, t.from_spin, t.paused_at, t.paused_ms, i.name AS item_name FROM timers t
               JOIN items i ON i.id = t.item_id WHERE t.user_id = ?`).get(user.id) || null,
     bank: {
       earnedMinutes: earned,
@@ -599,7 +617,7 @@ function buildState(user) {
       progressMinutes: balance > 0 ? balance % cost : 0,
       purchasesCount: q('SELECT COUNT(*) AS n FROM purchases WHERE user_id = ?').get(user.id).n,
     },
-    logs: q(`SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, l.points, i.name AS item_name
+    logs: q(`SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, l.points, l.note, l.edited, i.name AS item_name
              FROM time_logs l JOIN items i ON i.id = l.item_id
              WHERE l.user_id = ? AND l.ended_at > ? ORDER BY l.ended_at DESC LIMIT 2000`).all(user.id, Date.now() - 70 * DAY),
     wishes: q('SELECT id, name, price, created_at, bought_at FROM wishes WHERE user_id = ? ORDER BY bought_at IS NOT NULL, created_at DESC').all(user.id),
@@ -790,6 +808,11 @@ route('PATCH', '/api/settings', true, (req, res, body, user) => {
     if (!Number.isFinite(h) || h < 1 || h > 500) bad('Hours per unlock must be between 1 and 500');
     q('UPDATE users SET hours_per_unlock = ? WHERE id = ?').run(Math.round(h * 4) / 4, user.id);
   }
+  if (body.monthlyGoalHours !== undefined) {
+    const h = Number(body.monthlyGoalHours);
+    if (!Number.isFinite(h) || h < 0 || h > 300) bad('A monthly goal must be between 0 and 300 hours');
+    q('UPDATE users SET monthly_goal = ? WHERE id = ?').run(Math.round(h * 60), user.id);
+  }
   return buildState(currentSession(req));
 });
 
@@ -827,22 +850,74 @@ function otherUser(user, username) {
   if (u.id === user.id) bad('That’s you');
   return u;
 }
+// ---------- weekly challenge ----------
+// One challenge a week for everyone, in turn. You play it against your friends; whoever is on top
+// when the week ends gets 500 points. Only time that earned points counts (no backfilling).
+const CHALLENGE_POINTS = 500;
+const inWeek = 'user_id = ? AND ended_at >= ? AND ended_at < ?';
+const CHALLENGES = [
+  { key: 'rediscover', unit: 'minutes', sql: `SELECT COALESCE(SUM(scored_minutes), 0) AS v FROM time_logs WHERE ${inWeek} AND bonuses LIKE '%"key":"rediscovered"%'` },
+  { key: 'variety', unit: 'count', sql: `SELECT COUNT(DISTINCT item_id) AS v FROM time_logs WHERE ${inWeek} AND scored_minutes >= 15` },
+  { key: 'days', unit: 'count', sql: `SELECT COUNT(*) AS v FROM (SELECT date(ended_at / 1000, 'unixepoch', 'localtime') AS d, SUM(scored_minutes) AS m FROM time_logs WHERE ${inWeek} GROUP BY d HAVING m >= 15)` },
+  { key: 'focus', unit: 'minutes', sql: `SELECT COALESCE(MAX(scored_minutes), 0) AS v FROM time_logs WHERE ${inWeek} AND source = 'timer'` },
+  { key: 'projects', unit: 'minutes', sql: `SELECT COALESCE(SUM(l.scored_minutes), 0) AS v FROM time_logs l JOIN items i ON i.id = l.item_id WHERE l.${inWeek.replace(/ ended_at/g, ' l.ended_at')} AND i.kind = 'project'` },
+  { key: 'live', unit: 'minutes', sql: `SELECT COALESCE(SUM(scored_minutes), 0) AS v FROM time_logs WHERE ${inWeek} AND source = 'timer'` },
+];
+const challengeOf = (weekStart) => CHALLENGES[Math.round(weekStart / (7 * DAY)) % CHALLENGES.length];
+const nextWeek = (ws) => { const d = new Date(ws); d.setDate(d.getDate() + 7); return d.getTime(); };
+function challengeStandings(ids, weekStart) {
+  const c = challengeOf(weekStart), end = nextWeek(weekStart), stmt = q(c.sql);
+  return { challenge: c, values: ids.map((id) => ({ id, value: stmt.get(id, weekStart, end).v || 0 })) };
+}
+const challengeChecked = new Map();
+function awardChallenge(user, now = Date.now()) {
+  const lastWeek = score.startOfWeek(score.startOfWeek(now) - 1);
+  if (challengeChecked.get(user.id) === lastWeek) return;
+  if (challengeChecked.size > 50_000) challengeChecked.clear();
+  challengeChecked.set(user.id, lastWeek);
+  const day = dayKey(lastWeek);
+  if (q("SELECT 1 FROM score_events WHERE user_id = ? AND kind = 'challenge' AND day = ?").get(user.id, day)) return;
+  const ids = [user.id, ...friendIds(user.id)];
+  if (ids.length < 2) return;
+  const { challenge, values } = challengeStandings(ids, lastWeek);
+  const mine = values[0].value, top = Math.max(...values.map((v) => v.value));
+  if (mine > 0 && mine >= top) {
+    q('INSERT OR IGNORE INTO score_events (user_id, kind, day, points, label, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(user.id, 'challenge', day, CHALLENGE_POINTS, challenge.key, nextWeek(lastWeek));
+  }
+}
+function challengeView(user, ids, names, now = Date.now()) {
+  const weekStart = score.startOfWeek(now);
+  const { challenge, values } = challengeStandings(ids, weekStart);
+  return {
+    key: challenge.key, unit: challenge.unit, ends: nextWeek(weekStart), points: CHALLENGE_POINTS,
+    wins: q("SELECT COUNT(*) AS n FROM score_events WHERE user_id = ? AND kind = 'challenge'").get(user.id).n,
+    standings: values.map((v) => ({ username: names.get(v.id), value: v.value, you: v.id === user.id }))
+      .sort((a, b) => b.value - a.value || a.username.localeCompare(b.username)),
+  };
+}
+
 function friendsView(user) {
   const now = Date.now();
   const ids = [user.id, ...friendIds(user.id)];
   const names = new Map(q(`SELECT id, username FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => [r.id, r.username]));
   const periods = { week: score.startOfWeek(now), month: score.startOfMonth(now), all: 0 };
+  const streaks = new Map(ids.map((id) => [id, score.currentStreak(id, now)]));
+  const nudged = new Set(q('SELECT to_id FROM nudges WHERE from_id = ? AND day = ?').all(user.id, dayKey(now)).map((r) => r.to_id));
   const board = {};
   for (const [period, since] of Object.entries(periods)) {
     board[period] = ids.map((id) => {
       const p = score.pointsSince(id, since);
-      return { username: names.get(id), points: p.points, minutes: p.minutes, streak: score.currentStreak(id, now).days, you: id === user.id };
+      const st = streaks.get(id);
+      return { username: names.get(id), points: p.points, minutes: p.minutes, streak: st.days, you: id === user.id,
+        ...(id !== user.id && st.days > 0 && !st.doneToday ? { atRisk: true, nudged: nudged.has(id) } : {}) };
     }).sort((x, y) => y.points - x.points || y.minutes - x.minutes || x.username.localeCompare(y.username))
       .map((e, i) => ({ ...e, rank: i + 1 }));
   }
   return {
     board,
     feed: feedFor(user, ids),
+    challenge: challengeView(user, ids, names, now),
     friends: ids.slice(1).map((id) => names.get(id)).sort((x, y) => x.localeCompare(y)),
     incoming: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.from_id WHERE r.to_id = ? ORDER BY r.created_at DESC').all(user.id)
       .map((r) => ({ username: r.username, createdAt: r.created_at })),
@@ -902,6 +977,23 @@ function ownSteps(user, itemId) {
   return q('SELECT id, text, done_at, position FROM project_steps WHERE item_id = ? AND user_id = ? ORDER BY position, id').all(itemId, user.id)
     .map((x) => ({ id: x.id, text: x.text, done: !!x.done_at }));
 }
+// --- nudges: a friend's streak is waiting for today's 15 minutes
+route('POST', '/api/nudge', true, (req, res, body, user) => {
+  limit(req, 'nudge', 60, 3600_000);
+  const other = otherUser(user, body.username);
+  if (!areFriends(user.id, other.id)) throw new HttpError(403, 'You can only nudge your friends');
+  const st = score.currentStreak(other.id);
+  if (!st.days || st.doneToday) bad('Their streak is safe today');
+  const r = q('INSERT OR IGNORE INTO nudges (from_id, to_id, day, created_at) VALUES (?, ?, ?, ?)').run(user.id, other.id, dayKey(Date.now()), Date.now());
+  if (!r.changes) throw new HttpError(409, 'You already nudged them today');
+  return friendsView(user);
+});
+route('POST', '/api/nudges/seen', true, (req, res, body, user) => {
+  q('UPDATE nudges SET seen = 1 WHERE to_id = ?').run(user.id);
+  q('DELETE FROM nudges WHERE created_at < ?').run(Date.now() - 30 * DAY);
+  return { ok: true };
+});
+
 route('GET', '/api/items/:id/steps', true, (req, res, body, user, p) => ({ steps: ownSteps(user, ownItem(user, p.id).id) }));
 route('POST', '/api/items/:id/steps', true, (req, res, body, user, p) => {
   const item = ownItem(user, p.id);
@@ -945,6 +1037,7 @@ function momentText(kind, own) {
   if ((m = kind.match(/^streak-(\d+)$/))) return `${own ? 'your' : 'a'} ${m[1]}-day streak`;
   if (kind.startsWith('finish-')) return `${own ? 'your' : 'a'} finished project`;
   if ((m = kind.match(/^ach-(.+)$/))) { const a = ach.BY_KEY.get(m[1]); return `${own ? 'your' : 'an'} “${a ? a.name : 'achievement'}” badge`; }
+  if (kind === 'challenge') return own ? 'your weekly challenge win' : 'a weekly challenge win';
   return 'a moment';
 }
 function feedFor(user, ids) {
@@ -964,6 +1057,7 @@ function feedFor(user, ids) {
       if ((m = e.kind.match(/^streak-(\d+)$/))) text = `hit a ${m[1]}-day streak`;
       else if (e.kind.startsWith('finish-')) text = 'finished a project';
       else if ((m = e.kind.match(/^ach-(.+)$/))) { const a = ach.BY_KEY.get(m[1]); text = `unlocked “${a ? a.name : 'an achievement'}”`; }
+      else if (e.kind === 'challenge') text = 'won the weekly challenge';
       else text = 'did something great';
       return { id: e.id, username: e.username, you, text, at: e.created_at, fives: e.fives, fived: !!e.mine };
     });
@@ -1120,7 +1214,8 @@ route('PATCH', '/api/items/:id', true, (req, res, body, user, p) => {
   const archived = body.archived !== undefined ? (body.archived ? 1 : 0) : item.archived;
   const quick = typeof body.quick === 'boolean' ? (body.quick ? 1 : 0) : item.quick;
   const chill = typeof body.chill === 'boolean' ? (body.chill ? 1 : 0) : item.chill;
-  q('UPDATE items SET name = ?, kind = ?, archived = ?, quick = ?, chill = ? WHERE id = ?').run(name, kind, archived, quick, chill, item.id);
+  const snoozed = body.snoozeDays !== undefined ? (int(body.snoozeDays, 'Days', 0, 30) ? Date.now() + Number(body.snoozeDays) * DAY : 0) : item.snoozed_until;
+  q('UPDATE items SET name = ?, kind = ?, archived = ?, quick = ?, chill = ?, snoozed_until = ? WHERE id = ?').run(name, kind, archived, quick, chill, snoozed, item.id);
   if (archived) q('DELETE FROM timers WHERE user_id = ? AND item_id = ?').run(user.id, item.id);
   const bonus = archived && !item.archived ? score.finishBonus(user.id, { ...item, name, kind }) : null;
   return { ...buildState(user), bonus };
@@ -1132,25 +1227,55 @@ route('DELETE', '/api/items/:id', true, (req, res, body, user, p) => {
 });
 
 // --- timer & logs
+// Offline devices replay what happened with the time it happened (startedAt, endedAt, at).
+// Those times must sit between `min` and now, so nobody can backdate a timer by days.
+function clientTime(v, min) {
+  const now = Date.now();
+  if (v === undefined || v === null) return now;
+  const t = Number(v);
+  if (!Number.isFinite(t)) bad('That date is not valid');
+  return Math.min(Math.max(Math.round(t), min), now);
+}
+const OFFLINE_WINDOW = 12 * 3600_000;
+const note = (v) => (v === undefined || v === null ? '' : str(v, 'Note', 0, 200));
+const timerElapsed = (t, end) => end - t.started_at - t.paused_ms - (t.paused_at ? end - t.paused_at : 0);
+
 route('POST', '/api/timer/start', true, (req, res, body, user) => {
   const item = ownItem(user, body.itemId);
   if (item.archived) bad('Put it back on the wheel first');
   if (q('SELECT 1 FROM timers WHERE user_id = ?').get(user.id)) bad('A timer is already running. Stop it first.');
-  q('INSERT INTO timers (user_id, item_id, started_at, from_spin) VALUES (?, ?, ?, ?)').run(user.id, item.id, Date.now(), body.fromSpin === true ? 1 : 0);
+  const startedAt = clientTime(body.startedAt, Date.now() - OFFLINE_WINDOW);
+  q('INSERT INTO timers (user_id, item_id, started_at, from_spin) VALUES (?, ?, ?, ?)').run(user.id, item.id, startedAt, body.fromSpin === true ? 1 : 0);
+  return buildState(user);
+});
+route('POST', '/api/timer/pause', true, (req, res, body, user) => {
+  const t = q('SELECT * FROM timers WHERE user_id = ?').get(user.id);
+  if (!t) bad('No timer is running');
+  if (!t.paused_at) q('UPDATE timers SET paused_at = ? WHERE user_id = ?').run(clientTime(body.at, t.started_at), user.id);
+  return buildState(user);
+});
+route('POST', '/api/timer/resume', true, (req, res, body, user) => {
+  const t = q('SELECT * FROM timers WHERE user_id = ?').get(user.id);
+  if (!t) bad('No timer is running');
+  if (t.paused_at) {
+    const at = clientTime(body.at, t.paused_at);
+    q('UPDATE timers SET paused_at = 0, paused_ms = paused_ms + ? WHERE user_id = ?').run(at - t.paused_at, user.id);
+  }
   return buildState(user);
 });
 route('POST', '/api/timer/stop', true, (req, res, body, user) => {
   const t = q('SELECT * FROM timers WHERE user_id = ?').get(user.id);
   if (!t) bad('No timer is running');
-  const now = Date.now();
-  const elapsed = Math.round((now - t.started_at) / 60000);
+  const end = clientTime(body.endedAt, t.started_at);
+  const elapsed = Math.max(0, Math.round(timerElapsed(t, end) / 60000));
   let minutes = Math.min(elapsed, 24 * 60);
   if (body.minutes !== undefined) minutes = Math.min(int(body.minutes, 'Minutes', 0, 24 * 60), Math.max(elapsed, 1));
+  const text = note(body.note);
   const before = buildState(user).bank.unlocks;
   const item = q('SELECT * FROM items WHERE id = ?').get(t.item_id);
   const earned = tx(() => {
     q('DELETE FROM timers WHERE user_id = ?').run(user.id);
-    return minutes >= 1 && item ? addLog(user, item, minutes, now, 'timer', !!t.from_spin) : null;
+    return minutes >= 1 && item ? addLog(user, item, minutes, end, 'timer', !!t.from_spin, text) : null;
   });
   const state = buildState(user);
   return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before, earned };
@@ -1169,10 +1294,31 @@ route('POST', '/api/logs', true, (req, res, body, user) => {
     if (d > Date.now() + DAY) bad('You can’t log time in the future');
     endedAt = Math.min(Math.round(d), Date.now());
   }
+  const text = note(body.note);
   const before = buildState(user).bank.unlocks;
-  const earned = tx(() => addLog(user, item, minutes, endedAt, 'manual'));
+  const earned = tx(() => addLog(user, item, minutes, endedAt, 'manual', false, text));
   const state = buildState(user);
   return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before, earned };
+});
+// Edit a session: its note any time, its length too (points are worked out again as if it was
+// logged like that at the time). Making a timed session longer turns it into time added by hand.
+route('PATCH', '/api/logs/:id', true, (req, res, body, user, p) => {
+  const log = q('SELECT * FROM time_logs WHERE id = ? AND user_id = ?').get(id(p.id), user.id);
+  if (!log) throw new HttpError(404, 'That entry no longer exists');
+  const text = body.note !== undefined ? note(body.note) : log.note;
+  const minutes = body.minutes !== undefined ? int(body.minutes, 'Minutes', 1, 24 * 60) : log.minutes;
+  tx(() => {
+    q('UPDATE time_logs SET note = ? WHERE id = ?').run(text, log.id);
+    if (minutes === log.minutes) return;
+    const item = q('SELECT * FROM items WHERE id = ?').get(log.item_id);
+    const source = minutes > log.minutes ? 'manual' : log.source;
+    q('UPDATE time_logs SET scored_minutes = 0 WHERE id = ?').run(log.id);   // so the daily cap only counts the others
+    const e = score.scoreSession({ userId: user.id, item, minutes, endedAt: log.ended_at, source, fromSpin: !!log.from_spin, now: log.created_at || log.ended_at });
+    q(`UPDATE time_logs SET minutes = ?, source = ?, points = ?, scored_minutes = ?, multiplier = ?, bonuses = ?, edited = 1 WHERE id = ?`)
+      .run(minutes, source, e.points, e.scoredMinutes, e.multiplier, JSON.stringify(e.bonuses), log.id);
+    score.milestone(user.id, log.ended_at);
+  });
+  return buildState(user);
 });
 route('DELETE', '/api/logs/:id', true, (req, res, body, user, p) => {
   const r = q('DELETE FROM time_logs WHERE id = ? AND user_id = ?').run(id(p.id), user.id);
@@ -1234,7 +1380,7 @@ route('DELETE', '/api/purchases/:id', true, (req, res, body, user, p) => {
 // ---------- security headers ----------
 const CSP = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'", "style-src-attr 'unsafe-inline'",
-  "font-src 'self'", "img-src 'self'", "connect-src 'self'", "manifest-src 'self'",
+  "font-src 'self'", "img-src 'self'", "connect-src 'self'", "manifest-src 'self'", "worker-src 'self'",
   "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'",
 ].join('; ');
 function securityHeaders(req, res) {

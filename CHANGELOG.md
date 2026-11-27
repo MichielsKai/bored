@@ -3,6 +3,22 @@
 This list also appears in the app (Settings → What's new), so it's written for the people using bored?. The Dutch version is CHANGELOG.nl.md: keep both in step.
 Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
+## Unreleased
+
+### New
+- **Streak freezes.** Every 7 days in a row earns a freeze, and you can hold 2. Miss a day and one is used up for you, so a sick day doesn't wipe out your streak.
+- **Weekly challenges.** Each week brings a new challenge against your friends, like most time on things you'd forgotten about. The winner gets 500 points.
+- **Nudges.** When a friend's streak still needs today's 15 minutes, a bell shows up next to them on the leaderboard. Tap it to give them a nudge.
+- **A monthly goal.** Pick how many hours you want each month and follow along with a ring on the home screen. Set it under Stats.
+- **Notes on sessions.** Write down what you got done when you log time, or later. Each thing shows its recent sessions with their notes.
+- **Edit a session.** Tap a session to change how long it was or its note. Points are worked out again.
+- **Pause the timer** for a break, without stopping it.
+- **Not this week.** Take something off the wheel for 7 days without retiring it.
+- **Search and sort My stuff** once your list gets longer.
+- **Undo.** Deleting a session, wish or project step can be undone for a few seconds.
+- **Works offline.** The app opens without a connection, and timers and logged time are saved on your device and synced when you're back online.
+- **Shortcuts.** On Android, long-press the app icon to spin, continue your last timer or log time.
+
 ## 1.1.1 — 2026-11-27
 
 ### Fixed

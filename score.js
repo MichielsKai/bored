@@ -10,6 +10,10 @@
 //     focus         +20% for 1 h+, +40% for 2 h+ in one session
 //   plus one-off bonuses: streak milestones and finishing a project.
 //
+// Streak freezes: every 7 days in a row earns one (you can hold 2). A missed day uses one up
+// automatically, so the streak survives (without growing). They're worked out by replaying
+// your days in order, so nothing extra is stored and they can never get out of step.
+//
 // Fair play: at most 8 h a day earns points, and time added more than 2 days after it
 // happened earns none (so streaks can't be backfilled). Points are stored with each
 // session when it's logged, so the leaderboard is just a sum.
@@ -22,6 +26,8 @@ const BACKDATE_LIMIT = 2 * DAY;
 const MILESTONES = { 3: 250, 7: 750, 14: 2000, 30: 5000, 60: 10000, 100: 20000, 365: 50000 };
 const FINISH_BONUS = 1000;
 const FINISH_MIN_MINUTES = 120;
+const FREEZE_EVERY = 7;
+const FREEZE_MAX = 2;
 
 const pad = (n) => String(n).padStart(2, '0');
 const dayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
@@ -82,30 +88,41 @@ function scoring(db) {
     }
     return m;
   }
-  // Days in a row with 15+ minutes, ending the day before `ts`.
-  function streakBefore(userId, ts, days = daily(userId, startOfDay(ts) - 400 * DAY)) {
-    let n = 0; let d = prevDay(startOfDay(ts));
-    while ((days.get(dayKey(d)) || 0) >= STREAK_DAY_MIN && n < 400) { n++; d = prevDay(d); }
-    return n;
-  }
-  // The streak as it stands now: alive if today or yesterday counted.
-  function currentStreak(userId, now = Date.now()) {
-    const days = daily(userId, startOfDay(now) - 401 * DAY);
-    const today = days.get(dayKey(now)) || 0;
-    const before = streakBefore(userId, now, days);
-    if (today >= STREAK_DAY_MIN) return { days: before + 1, doneToday: true, todayMinutes: today };
-    return { days: before, doneToday: false, todayMinutes: today };
-  }
-  function best(userId) {
-    const days = [...daily(userId, 0).entries()].filter(([, m]) => m >= STREAK_DAY_MIN).map(([k]) => k).sort();
-    let bestRun = 0, run = 0, last = null;
-    for (const k of days) {
-      const t = new Date(`${k}T12:00:00`).getTime();
-      run = last && Math.round((t - last) / DAY) === 1 ? run + 1 : 1;
-      bestRun = Math.max(bestRun, run); last = t;
+  // Replays every day from your first streak day up to (not including) the day of `ts`.
+  function walk(userId, ts) {
+    const days = daily(userId, 0);
+    const st = { streak: 0, freezes: 0, best: 0, frozen: [] };
+    let first = null;
+    for (const [k, m] of days) if (m >= STREAK_DAY_MIN && (!first || k < first)) first = k;
+    if (!first) return st;
+    const end = dayKey(ts);
+    for (const d = new Date(`${first}T12:00:00`); dayKey(d.getTime()) < end; d.setDate(d.getDate() + 1)) {
+      const k = dayKey(d.getTime());
+      if ((days.get(k) || 0) >= STREAK_DAY_MIN) {
+        st.streak++;
+        if (st.streak % FREEZE_EVERY === 0) st.freezes = Math.min(FREEZE_MAX, st.freezes + 1);
+        st.best = Math.max(st.best, st.streak);
+      } else if (st.streak > 0 && st.freezes > 0) { st.freezes--; st.frozen.push(k); }
+      else st.streak = 0;
     }
-    return bestRun;
+    return st;
   }
+  // Days in a row with 15+ minutes (freezes bridge missed days), ending the day before `ts`.
+  function streakBefore(userId, ts) { return walk(userId, ts).streak; }
+  // The streak as it stands now: alive if today, yesterday or a freeze kept it going.
+  function currentStreak(userId, now = Date.now()) {
+    const st = walk(userId, now);
+    const today = daily(userId, startOfDay(now)).get(dayKey(now)) || 0;
+    const yesterday = dayKey(prevDay(startOfDay(now)));
+    const base = { freezes: st.freezes, frozeYesterday: st.frozen.includes(yesterday), todayMinutes: today };
+    if (today >= STREAK_DAY_MIN) {
+      const days = st.streak + 1;
+      const freezes = days % FREEZE_EVERY === 0 ? Math.min(FREEZE_MAX, st.freezes + 1) : st.freezes;
+      return { ...base, days, doneToday: true, freezes, best: Math.max(st.best, days) };
+    }
+    return { ...base, days: st.streak, doneToday: false, best: st.best };
+  }
+  function best(userId) { return currentStreak(userId).best; }
 
   // ---- scoring one session (call before inserting it)
   function scoreSession({ userId, item, minutes, endedAt, source, fromSpin, now = Date.now() }) {
@@ -141,9 +158,9 @@ function scoring(db) {
   // After a session is saved: did it complete a streak milestone?
   function milestone(userId, endedAt, now = Date.now()) {
     if (now - endedAt > BACKDATE_LIMIT) return null;
-    const days = daily(userId, startOfDay(endedAt) - 401 * DAY);
+    const days = daily(userId, startOfDay(endedAt));
     if ((days.get(dayKey(endedAt)) || 0) < STREAK_DAY_MIN) return null;
-    const streak = streakBefore(userId, endedAt, days) + 1;
+    const streak = streakBefore(userId, endedAt) + 1;
     const pts = MILESTONES[streak];
     if (!pts) return null;
     const r = q(`INSERT OR IGNORE INTO score_events (user_id, kind, day, points, label, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
@@ -171,15 +188,17 @@ function scoring(db) {
   function summary(userId, now = Date.now()) {
     const streak = currentStreak(userId, now);
     const week = pointsSince(userId, startOfWeek(now));
+    const month = pointsSince(userId, startOfMonth(now));
     const today = pointsSince(userId, startOfDay(now));
     return {
       week: week.points, weekMinutes: week.minutes,
-      month: pointsSince(userId, startOfMonth(now)).points,
+      month: month.points, monthMinutes: month.minutes, monthStart: startOfMonth(now),
       total: pointsSince(userId, 0).points,
       today: today.points,
       streak: streak.days, streakDoneToday: streak.doneToday, todayMinutes: streak.todayMinutes,
       streakGoal: STREAK_DAY_MIN,
-      bestStreak: best(userId),
+      bestStreak: streak.best,
+      freezes: streak.freezes, freezeMax: FREEZE_MAX, frozeYesterday: streak.frozeYesterday,
       streakBonus: Math.min(10 * streakBefore(userId, now), 100),
       nextMilestone: (() => { const d = Object.keys(MILESTONES).map(Number).find((x) => x > streak.days); return d ? { days: d, points: MILESTONES[d] } : null; })(),
       weekStart: startOfWeek(now),
@@ -189,4 +208,4 @@ function scoring(db) {
   return { scoreSession, milestone, finishBonus, pointsSince, summary, currentStreak, best, startOfWeek, startOfMonth };
 }
 
-module.exports = { scoring, startOfWeek, dayKey, POINTS_PER_MIN, MILESTONES, DAILY_CAP_MIN, STREAK_DAY_MIN };
+module.exports = { scoring, startOfWeek, dayKey, POINTS_PER_MIN, MILESTONES, DAILY_CAP_MIN, STREAK_DAY_MIN, FREEZE_EVERY, FREEZE_MAX };

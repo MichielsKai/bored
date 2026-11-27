@@ -10,6 +10,8 @@ Spin a wheel of the hobbies, games and projects you already own. Do the thing, l
 - **Filters, checklists, recaps, achievements**: spin only quick or low-energy things, break projects into steps, get a weekly recap, and collect 50 achievements (5 of them legendary).
 - **Accounts**: anyone can sign up. The first account becomes the admin.
 - **Languages**: English and Dutch (Nederlands), following the device language, switchable in Settings.
+- **Offline**: a service worker (`public/sw.js`) keeps the app's files on the device; timers and logged time made offline are queued and synced later.
+- **Streak freezes**: worked out by replaying a user's days in order (`score.js`), checked by `test/score.js`.
 
 No npm dependencies: Node's built-in HTTP server, crypto (scrypt passwords) and SQLite.
 

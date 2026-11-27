@@ -38,6 +38,8 @@ jobs:
           echo "App renders"
       - name: Security tests
         run: node --experimental-sqlite --disable-warning=ExperimentalWarning test/security.js
+      - name: Streaks and freezes
+        run: node --experimental-sqlite --disable-warning=ExperimentalWarning test/score.js
       - name: Dutch translation is complete
         run: node test/i18n.js
 

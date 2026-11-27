@@ -3,6 +3,22 @@
 Nederlandse versie van CHANGELOG.md, getoond in de app (Instellingen → Wat is er nieuw) als die in het Nederlands staat.
 Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 
+## Unreleased
+
+### Nieuw
+- **Reeksbevriezingen.** Elke 7 dagen op rij leveren een bevriezing op, en je kunt er 2 bijhouden. Mis je een dag, dan wordt er automatisch een gebruikt, zodat een ziektedag je reeks niet wegveegt.
+- **Weekuitdagingen.** Elke week een nieuwe uitdaging tegen je vrienden, zoals de meeste tijd aan dingen die je vergeten was. De winnaar krijgt 500 punten.
+- **Duwtjes.** Heeft de reeks van een vriend vandaag nog 15 minuten nodig, dan staat er een belletje naast hen in het klassement. Tik erop om hen een duwtje te geven.
+- **Een maanddoel.** Kies hoeveel uur je per maand wilt en volg het met een ring op het beginscherm. Stel het in bij Cijfers.
+- **Notities bij sessies.** Schrijf op wat je gedaan kreeg als je tijd noteert, of later. Elk ding toont zijn recente sessies met hun notities.
+- **Een sessie aanpassen.** Tik op een sessie om de duur of de notitie te wijzigen. De punten worden opnieuw berekend.
+- **De timer pauzeren** voor een pauze, zonder hem te stoppen.
+- **Niet deze week.** Haal iets 7 dagen van het rad zonder het op te bergen.
+- **Zoeken en sorteren in Spullen** als je lijst langer wordt.
+- **Ongedaan maken.** Een sessie, wens of projectstap verwijderen kun je enkele seconden ongedaan maken.
+- **Werkt offline.** De app opent zonder verbinding, en timers en genoteerde tijd worden op je toestel bewaard en verstuurd als je terug online bent.
+- **Snelkoppelingen.** Op Android: hou het app-icoon ingedrukt om te draaien, je laatste timer verder te zetten of tijd te noteren.
+
 ## 1.1.1 — 2026-11-27
 
 ### Opgelost
