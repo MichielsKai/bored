@@ -3,7 +3,7 @@
 Nederlandse versie van CHANGELOG.md, getoond in de app (Instellingen → Wat is er nieuw) als die in het Nederlands staat.
 Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 
-## Unreleased
+## 1.1.0 — 2026-11-27
 
 ### Nieuw
 - **Punten voor alles wat je doet.** Elke sessie levert 10 punten per minuut op, met bonussen erbovenop: je reeks (+10% voor elke dag op rij, tot +100%), iets oppakken dat je liet liggen (+50% na 2 weken, +100% na een maand), de timer meteen na een draai starten (+25%), de live timer gebruiken (+20%) en lange sessies (+20% voor een uur, +40% voor twee).

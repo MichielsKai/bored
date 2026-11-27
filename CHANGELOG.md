@@ -3,7 +3,7 @@
 This list also appears in the app (Settings → What's new), so it's written for the people using bored?. The Dutch version is CHANGELOG.nl.md: keep both in step.
 Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
-## Unreleased
+## 1.1.0 — 2026-11-27
 
 ### New
 - **Points for everything you do.** Every session earns 10 points a minute, boosted by bonuses: your streak (+10% for each day in a row, up to +100%), picking up something you'd neglected (+50% after 2 weeks, +100% after a month), starting the timer straight from a spin (+25%), using the live timer (+20%), and long sessions (+20% for an hour, +40% for two).
