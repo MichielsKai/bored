@@ -1,26 +1,30 @@
 # Changelog
 
-Version numbers: **major.minor.patch**. Kai decides whether a release is minor or major.
+This list also appears in the app (Settings → What's new), so it's written for the people using bored?.
+Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
 ## Unreleased
 
-### Added
-- **Points**: every session earns points (10 per minute) times a multiplier built from bonuses: streak (+10% per day, up to +100%), rediscovering something untouched for 2+ weeks (+50%/+100%), the wheel's pick (+25% when the timer starts from a spin), live timer (+20%) and focus (+20% for 1 h, +40% for 2 h). Streak milestones (3 to 365 days) and finishing a project pay one-off bonuses. Up to 8 hours a day count, and time added more than 2 days late earns nothing.
-- **Points reveal** after logging time: the bonuses pop in one by one and the total counts up.
-- **Streak card** on the spin screen, showing today's progress and the bonus for your next session.
-- **Friends**: add people by username, accept or decline requests, remove friends. Friends see only points, hours and streak.
-- **Leaderboard** for this week, this month and all time, with rank changes since your last visit.
-- Points tiles in Stats and points per session in the history. Sessions from before 1.1 get base points.
+### New
+- **Points for everything you do.** Every session earns 10 points a minute, boosted by bonuses: your streak (+10% for each day in a row, up to +100%), picking up something you'd neglected (+50% after 2 weeks, +100% after a month), starting the timer straight from a spin (+25%), using the live timer (+20%), and long sessions (+20% for an hour, +40% for two).
+- **Streaks.** Do at least 15 minutes a day to keep your streak going. Hitting 3, 7, 14, 30, 60, 100 or 365 days earns bonus points, and so does finishing a project.
+- **A points reveal** after you log time, showing every bonus you earned.
+- **Friends and a leaderboard.** Add friends by username and compare points this week, this month or all time. Friends only see your points, hours and streak, never what you're doing or what's on your wishlist.
+- **What's new**, this screen: see which version you're on and what changed.
 
 ### Changed
-- The line above a spin result no longer mentions a time of day ("Tonight you're doing").
+- The line above a spin result no longer assumes it's evening.
+- Sessions from before this version count for points too (without bonuses).
+- Up to 8 hours a day earn points, and time added more than 2 days later doesn't, to keep the leaderboard fair.
 
 ## 1.0.0 — 2026-11-27
 
-First official release (commit `296d8a7`).
+The first official version.
 
-- Spin-the-wheel for hobbies, games and projects, favouring neglected ones
-- Live timer and manual time logging, wishlist, one purchase unlocked per 20 hours
-- Invite-only accounts with an admin, password resets, signed-in device management
-- Security hardening and a penetration test, with 42 automated attack tests
-- Automatic deployment to the Raspberry Pi through GitHub and the Pi updater
+### New
+- **Spin the wheel** to pick a hobby, game or project you already own. Things you haven't touched in a while get a bigger slice.
+- **Track your time** with a live timer that keeps running on all your devices, or add it afterwards.
+- **Earn new purchases**: every 20 hours on your own stuff unlocks one, and your wishlist waits until then.
+- **Invite-only accounts** with an admin, password resets and a list of signed-in devices.
+- **Strong security**: carefully stored passwords, protection against password guessing, and dozens of automatic attack tests before every update.
+- **Add to your home screen** for an app-like experience, with sounds and confetti along the way.

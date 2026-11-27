@@ -565,6 +565,31 @@ const route = (method, pattern, auth, handler) => {
 };
 const requireAdmin = (user) => { if (!user.is_admin) throw new HttpError(403, 'Only the admin can do that'); };
 
+// What's new: CHANGELOG.md, parsed once at startup. Unreleased notes only show in dev builds.
+const CHANGELOG = (() => {
+  let text = '';
+  try { text = fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8'); } catch { return []; }
+  const versions = []; let cur = null, group = null;
+  for (const line of text.split('\n')) {
+    let m;
+    if ((m = line.match(/^## (.+?)\s*$/))) {
+      const [version, date] = m[1].split(/\s+[—–-]\s+/);
+      cur = { version: version.trim(), date: date ? date.trim() : null, intro: '', groups: [] }; group = null;
+      versions.push(cur); continue;
+    }
+    if (!cur) continue;
+    if ((m = line.match(/^### (.+?)\s*$/))) { group = { title: m[1], items: [] }; cur.groups.push(group); continue; }
+    if ((m = line.match(/^- (.+)$/))) {
+      if (!group) { group = { title: '', items: [] }; cur.groups.push(group); }
+      group.items.push(m[1].trim()); continue;
+    }
+    if (line.trim() && !group) cur.intro = (cur.intro ? `${cur.intro} ` : '') + line.trim();
+  }
+  return versions.filter((v) => v.version !== 'Unreleased' || APP_VERSION === 'dev')
+    .map((v) => (v.version === 'Unreleased' ? { ...v, version: 'Next version', upcoming: true } : v));
+})();
+route('GET', '/api/changelog', false, () => ({ release: APP_RELEASE, commit: APP_VERSION, versions: CHANGELOG }));
+
 route('GET', '/api/config', false, () => ({ needsInvite: userCount() > 0, defaultHours: DEFAULT_HOURS, release: APP_RELEASE, version: APP_VERSION, buildDate: BUILD_DATE, passwordMin: PASSWORD_MIN }));
 
 // --- auth

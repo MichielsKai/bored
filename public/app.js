@@ -562,7 +562,10 @@ function settingsSheet() {
         ${u.isAdmin ? '' : '<button class="btn small danger" data-act="account-del">Delete account</button>'}
       </div>
     </div>
-    <p class="hint" style="text-align:center">bored? ${esc(config.release || '')} (${esc(config.version || 'dev')})${config.buildDate ? `, built ${esc(new Date(config.buildDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}</p>`);
+    <button class="version-btn" data-act="whats-new">
+      <span class="main"><b>What’s new</b><span class="muted small">You’re on version ${esc(config.release || '?')}</span></span>
+      <span class="chev">${ICON.chev}</span>
+    </button>`);
   loadDevices();
   if (u.isAdmin) loadPeople();
 }
@@ -603,6 +606,35 @@ async function loadPeople() {
   } catch (e) { const el = $('#people', sheet); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
 }
 
+
+// --- What's new
+// Changelog text is ours, but it still goes through esc() before the bit of markdown is applied.
+const mdLite = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+async function whatsNewSheet() {
+  let data;
+  try { data = await api('GET', '/api/changelog'); } catch (e) { toast(e.message); return; }
+  const fmtDate = (d) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+  const block = (v) => `${v.intro ? `<p>${mdLite(v.intro)}</p>` : ''}${v.groups.map((g) => `
+      ${g.title ? `<h4>${esc(g.title)}</h4>` : ''}<ul class="changes">${g.items.map((i) => `<li>${mdLite(i)}</li>`).join('')}</ul>`).join('')}`;
+  const [first, ...rest] = data.versions;
+  openSheet(`${sheetHead('What’s new')}
+    <div class="version-now">
+      <span class="badge-ver">${esc(data.release)}</span>
+      <span class="muted small">You’re on version ${esc(data.release)}${data.commit && data.commit !== 'dev' ? ` (build ${esc(data.commit)})` : ''}</span>
+    </div>
+    ${first ? `<section class="release current">
+      <div class="release-head"><h3>${first.upcoming ? 'Coming next' : `Version ${esc(first.version)}`}</h3><span class="muted small">${esc(fmtDate(first.date))}</span></div>
+      ${block(first)}</section>` : '<p class="muted">No release notes yet.</p>'}
+    ${rest.map((v) => `<details class="release"><summary><span class="release-head"><b>Version ${esc(v.version)}</b><span class="muted small">${esc(fmtDate(v.date))}</span></span></summary>${block(v)}</details>`).join('')}`);
+  if (data.release) store.set('seenRelease', data.release);
+}
+// After an update, show what's new once (not on someone's very first visit).
+function announceUpdate() {
+  const seen = store.get('seenRelease', null);
+  if (!config.release) return;
+  if (!seen) { store.set('seenRelease', config.release); return; }
+  if (seen !== config.release && !sheet.open) setTimeout(() => { if (!sheet.open) whatsNewSheet(); }, 600);
+}
 
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* insecure context, fall back */ }
@@ -1140,6 +1172,7 @@ document.addEventListener('click', async (e) => {
         selectedWeek = Number(el.dataset.i); SFX.click(); render(); break;
       }
       case 'settings': settingsSheet(); break;
+      case 'whats-new': whatsNewSheet(); break;
       case 'board': boardPeriod = el.dataset.v; store.set('board', boardPeriod); SFX.click(); $('#view').innerHTML = viewFriends(); afterFriendsRender(); break;
       case 'friend': friendSheet(el.dataset.name); break;
       case 'friend-accept':
@@ -1330,4 +1363,5 @@ document.fonts?.ready.then(() => { if (S && view === 'spin') drawWheel(); });
 (async () => {
   try { config = await (await fetch('/api/config')).json(); } catch { /* defaults */ }
   try { await api('GET', '/api/state'); } catch { if (!S) renderAuth(); }
+  if (S) announceUpdate();
 })();

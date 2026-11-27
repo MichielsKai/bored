@@ -438,6 +438,14 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     await post('/api/timer/cancel', {}, { cookie: f3 });
   });
 
+  await check('what’s new lists released versions as plain JSON', async () => {
+    const r = await req('GET', '/api/changelog');
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-type'], /^application\/json/);
+    assert.ok(r.json.versions.some((v) => v.version === '1.0.0' && v.groups.length));
+    assert.equal(r.json.release, require('../package.json').version);
+  });
+
   console.log('\nStorage');
   await check('database files are private to the app user', async () => {
     const mode = fs.statSync(path.join(DATA, 'bored.db')).mode & 0o777;

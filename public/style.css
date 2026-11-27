@@ -407,3 +407,20 @@ dialog#sheet::backdrop { background: rgba(10, 12, 24, 0.4); }
 .sess { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
 .how ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .tiles + .tiles { margin-top: -16px; }
+
+/* ---------- what's new ---------- */
+.version-btn { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 0; border-radius: var(--r); background: var(--bg); text-align: left; cursor: pointer; color: var(--text); }
+.version-btn .main { flex: 1; display: flex; flex-direction: column; line-height: 1.3; }
+.version-now { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--accent-soft); }
+.badge-ver { font-weight: 800; font-size: 1.05rem; padding: 4px 12px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); }
+.release { display: flex; flex-direction: column; gap: 8px; }
+.release-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex: 1; }
+.release h3 { font-size: 1.1rem; }
+.release h4 { margin: 6px 0 0; font-size: 0.8rem; font-weight: 700; color: var(--text-2); }
+.changes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 0.95rem; line-height: 1.45; }
+.changes b { font-weight: 700; }
+details.release { padding: 12px 14px; border-radius: 14px; background: var(--bg); }
+details.release summary { cursor: pointer; list-style: none; display: flex; }
+details.release summary::-webkit-details-marker { display: none; }
+details.release[open] summary { margin-bottom: 8px; }
+.release code { font-size: 0.85em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
