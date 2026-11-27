@@ -1,0 +1,15 @@
+# Weekly check for newer versions of the GitHub Actions and the Node base image.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # stay on the Node 22 LTS line; minor/patch updates still come through
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

@@ -88,6 +88,7 @@ ls data/backups/            # automatic backups made before each update
 | `BORED_PORT` | `3000` | Port on the Pi |
 | `TZ` | `Europe/Brussels` | Timezone |
 | `DEFAULT_HOURS_PER_UNLOCK` | `20` | Hours per purchase for new accounts (each user can change their own) |
+| `BORED_BIND` | detected | `127.0.0.1` = only the Pi itself (your tunnel) can connect; `0.0.0.0` = reachable on your network |
 
 Run `docker compose up -d` after editing `.env`.
 
@@ -101,6 +102,37 @@ As admin, tap the gear icon (top right):
 - The key works any number of times.
 - **Make a new key** stops the old key right away. Existing accounts keep working.
 - The admin account can't be deleted, because it holds the invite key.
+
+## Security
+
+What's in place, and tested on every build by `test/security.js` (an attack test suite: a failing test means no new version ships):
+
+**Passwords**
+- Hashed with scrypt at OWASP-recommended cost (N=2^15, r=8, p=3), a unique salt per password, never stored or logged in plain text. Older hashes are upgraded automatically on the next login.
+- New passwords need 10+ characters, can't be common, repetitive or contain the username, and are checked against known data breaches via Have I Been Pwned. Only the first 5 characters of a hash ever leave the Pi (k-anonymity).
+- 5 wrong passwords slow that account down (30 seconds, doubling up to 15 minutes), whoever is trying and from wherever. Unknown usernames behave exactly the same, so accounts can't be probed. Each IP also gets 20 login attempts per 15 minutes.
+- Hashing runs at most 3 at a time, so a login flood can't exhaust the Pi.
+
+**Accounts**
+- Sign-up needs the invite key, checked before anything else.
+- Admin (Settings → People): see who has an account, give someone a one-time reset code (valid 24 hours), or remove an account.
+- Settings → Signed-in devices: see where you're logged in and sign out other devices. Logins end after 30 days unused (90 days at most). Changing or resetting a password signs out every other device.
+
+**Web**
+- Session cookies are random 256-bit tokens, stored only as hashes. They're `HttpOnly`, `SameSite=Lax`, and `Secure` with the `__Host-` prefix over HTTPS.
+- Cross-site requests are blocked (same-origin JSON only, `Sec-Fetch-Site` check).
+- Strict Content Security Policy (no inline scripts, no third-party anything), HSTS, no framing, no referrers, locked-down browser permissions.
+- Proxy headers (`CF-Connecting-IP`, `X-Forwarded-Proto`) are only trusted from the tunnel's own address, so nobody on your network can fake them.
+- Names are cleaned of hidden control and text-direction characters; everything shown is HTML-escaped.
+- Size limits on requests, timeouts on slow connections, a per-IP request cap, and malformed requests can't crash the server.
+
+**On the Pi**
+- The container runs as a normal user with a read-only filesystem, no Linux capabilities, no privilege escalation, and capped memory and processes.
+- If your Cloudflare tunnel runs on the Pi, the app only listens on localhost.
+- The database and backups are readable only by the app's user.
+- The image is rebuilt weekly with the latest Alpine and Node security patches, and Dependabot proposes updates to the build tools.
+
+**Security log:** `docker compose logs bored | grep security` shows failed logins, lockouts, password changes and admin actions.
 
 ## Why 20 hours?
 

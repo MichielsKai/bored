@@ -339,29 +339,39 @@ function viewStats() {
 const urlInvite = new URLSearchParams(location.search).get('invite') || '';
 function renderAuth(mode, error = '') {
   if (!mode) mode = urlInvite || !config.needsInvite ? 'register' : 'login';
-  const reg = mode === 'register';
+  const reg = mode === 'register', reset = mode === 'reset';
   const first = reg && !config.needsInvite;
+  const min = config.passwordMin || 10;
+  const title = reg ? 'Create an account' : reset ? 'Reset your password' : 'Sign in';
+  const formName = reg ? 'register' : reset ? 'reset' : 'login';
   $('#app').innerHTML = `
     <main class="auth">
       <div class="stack" style="gap:10px">
         <h1 class="logo">bored?</h1>
         <p class="tag">Spin for something you already own. Spend some time on it. Earn the next new thing.</p>
       </div>
-      <form class="stack surface auth-card" data-form="${reg ? 'register' : 'login'}">
-        <h2>${reg ? 'Create an account' : 'Sign in'}</h2>
+      <form class="stack surface auth-card" data-form="${formName}">
+        <h2>${title}</h2>
         ${first ? `<p class="note">You’re the first one here, so this account becomes the admin. You’ll get an invite key to share with others.</p>` : ''}
+        ${reset ? `<p class="hint">Ask the admin for a reset code. It works once, for 24 hours.</p>` : ''}
         <div class="field"><label for="u">Username</label>
           <input class="input" id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="${reg ? 3 : 1}" maxlength="32"></div>
-        <div class="field"><label for="p">Password${reg ? ', at least 8 characters' : ''}</label>
-          <input class="input" id="p" name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required minlength="${reg ? 8 : 1}"></div>
+        ${reset ? `<div class="field"><label for="rc">Reset code</label>
+          <input class="input" id="rc" name="code" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" required placeholder="xxxx-xxxx-xxxx"></div>` : ''}
+        <div class="field"><label for="p">${reset ? 'New password' : 'Password'}</label>
+          <input class="input" id="p" name="password" type="password" autocomplete="${reg || reset ? 'new-password' : 'current-password'}" required minlength="${reg || reset ? min : 1}" maxlength="256">
+          ${reg || reset ? `<span class="hint">At least ${min} characters. A few random words, like “cactus lamp tuesday river”, is strong and easy to remember.</span>` : ''}</div>
         ${reg && !first ? `<div class="field"><label for="inv">Invite key</label>
           <input class="input" id="inv" name="invite" autocomplete="off" autocapitalize="none" spellcheck="false" required placeholder="xxxx-xxxx-xxxx-xxxx" value="${esc(urlInvite)}">
           <span class="hint">Ask the person who runs this site for one.</span></div>` : ''}
         <p class="form-error" id="auth-error">${esc(error)}</p>
-        <button class="btn primary block">${reg ? 'Create account' : 'Sign in'}</button>
+        <button class="btn primary block">${reg ? 'Create account' : reset ? 'Set new password' : 'Sign in'}</button>
       </form>
-      ${first ? '' : `<p class="muted" style="text-align:center">${reg ? 'Already have an account?' : 'Got an invite key?'}
-        <button class="auth-switch" data-act="auth-mode" data-v="${reg ? 'login' : 'register'}">${reg ? 'Sign in' : 'Create an account'}</button></p>`}
+      ${first ? '' : `<div class="stack" style="gap:6px;text-align:center">
+        <p class="muted">${reg ? 'Already have an account?' : reset ? 'Remembered it?' : 'Got an invite key?'}
+          <button class="auth-switch" data-act="auth-mode" data-v="${reg || reset ? 'login' : 'register'}">${reg || reset ? 'Sign in' : 'Create an account'}</button></p>
+        ${mode === 'login' ? `<p class="muted">Forgot your password? <button class="auth-switch" data-act="auth-mode" data-v="reset">Use a reset code</button></p>` : ''}
+      </div>`}
     </main>`;
   $('#u').focus();
 }
@@ -385,6 +395,11 @@ function settingsSheet() {
       <div class="row"><input class="input" id="hpu" name="hours" type="number" min="1" max="500" step="0.25" value="${u.hoursPerUnlock}" aria-label="Hours per new purchase" style="width:110px"><button class="btn">Save</button></div>
       <p class="hint">The default is 20 h. That’s roughly what it takes to get past the clumsy beginner stage of a skill (Josh Kaufman’s 20-hour rule), so you actually enjoy what you own before buying more. At a few hours a week it also adds a 3 to 6 week cooling-off period, longer than the popular 30-day rule against impulse buys.</p>
     </form>
+    ${u.isAdmin ? `<div class="sheet-section"><h3>People</h3><div id="people"><p class="hint">Loading…</p></div></div>` : ''}
+    <div class="sheet-section">
+      <h3>Signed-in devices</h3>
+      <div id="devices"><p class="hint">Loading…</p></div>
+    </div>
     <div class="sheet-section">
       <h3>Account</h3>
       <div class="row wrap">
@@ -398,7 +413,46 @@ function settingsSheet() {
       </div>
     </div>
     <p class="hint" style="text-align:center">bored? version ${esc(config.version || 'dev')}${config.buildDate ? `, built ${esc(new Date(config.buildDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}</p>`);
+  loadDevices();
+  if (u.isAdmin) loadPeople();
 }
+
+const seen = (ts) => {
+  if (!ts) return 'never signed in';
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 15) return 'active now';
+  if (m < 60 * 24) return 'active today';
+  const d = Math.floor(m / 1440);
+  return d === 1 ? 'active yesterday' : `active ${d} days ago`;
+};
+async function loadDevices() {
+  try {
+    const { sessions } = await api('GET', '/api/sessions');
+    const el = $('#devices', sheet); if (!el) return;
+    const others = sessions.filter((x) => !x.current).length;
+    el.innerHTML = `<ul class="list">${sessions.map((x) => `<li><div class="plain-row">
+        <div class="main"><div class="name">${esc(x.device)}</div>
+          <div class="muted small">${x.current ? 'This device' : `${seen(x.lastSeen)}, signed in ${esc(day(x.createdAt))}`}</div></div>
+        ${x.current ? '' : `<button class="btn small" data-act="session-revoke" data-id="${esc(x.id)}">Sign out</button>`}
+      </div></li>`).join('')}</ul>
+      ${others ? `<button class="btn ghost" data-act="sessions-others">Sign out all other devices</button>` : ''}
+      <p class="hint">Logins end after 30 days without use. Changing your password signs out every other device.</p>`;
+  } catch (e) { const el = $('#devices', sheet); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
+}
+async function loadPeople() {
+  try {
+    const { users } = await api('GET', '/api/admin/users');
+    const el = $('#people', sheet); if (!el) return;
+    el.innerHTML = `<ul class="list">${users.map((x) => `<li><div class="plain-row">
+        <div class="main"><div class="name">${esc(x.username)}${x.you ? ' (you)' : ''}</div>
+          <div class="muted small">${seen(x.lastSeen)}, joined ${esc(day(x.createdAt))}${x.resetPending ? ', reset code waiting' : ''}</div></div>
+        ${x.you ? '' : `<button class="btn small" data-act="user-reset" data-id="${x.id}" data-name="${esc(x.username)}">Reset</button>
+          <button class="icon-btn" data-act="user-remove" data-id="${x.id}" data-name="${esc(x.username)}" aria-label="Remove ${esc(x.username)}">${ICON.x}</button>`}
+      </div></li>`).join('')}</ul>
+      <p class="hint">Forgot their password? Reset gives you a one-time code to send them. It works for 24 hours.</p>`;
+  } catch (e) { const el = $('#people', sheet); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
+}
+
 
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* insecure context, fall back */ }
@@ -892,6 +946,32 @@ document.addEventListener('click', async (e) => {
         selectedWeek = Number(el.dataset.i); SFX.click(); render(); break;
       }
       case 'settings': settingsSheet(); break;
+      case 'session-revoke': await api('POST', '/api/sessions/revoke', { id: el.dataset.id }); SFX.thud(); loadDevices(); break;
+      case 'sessions-others':
+        confirmSheet('Sign out other devices?', 'Every device except this one will need to sign in again.', 'Sign them out', async () => {
+          await api('POST', '/api/sessions/revoke', { others: true }); SFX.thud(); toast('Other devices signed out'); setTimeout(settingsSheet, 0);
+        });
+        break;
+      case 'user-reset': {
+        const name = el.dataset.name;
+        confirmSheet(`Reset ${esc(name)}’s password?`, 'You’ll get a one-time code to send them. Their current password keeps working until they use it.', 'Make reset code', async () => {
+          const r = await api('POST', `/api/admin/users/${id}/reset`);
+          setTimeout(() => openSheet(`${sheetHead('Reset code')}
+            <p>Send this to <b>${esc(r.username)}</b>. On the sign-in screen they tap “Use a reset code”. It works once, for 24 hours.</p>
+            <div class="key">${esc(r.code)}</div>
+            <div class="sheet-actions"><button class="btn primary" data-act="copy-text" data-text="${esc(r.code)}">${ICON.copy}Copy code</button>
+            <button class="btn" data-act="settings">Done</button></div>`), 0);
+        }, false);
+        break;
+      }
+      case 'user-remove': {
+        const name = el.dataset.name;
+        confirmSheet(`Remove ${esc(name)}?`, `This deletes ${esc(name)}’s account and everything in it. It can’t be undone.`, 'Remove account', async () => {
+          await api('POST', `/api/admin/users/${id}/delete`); SFX.thud(); toast(`${name} removed`); setTimeout(settingsSheet, 0);
+        });
+        break;
+      }
+      case 'copy-text': toast(await copyText(el.dataset.text) ? 'Copied' : 'Couldn’t copy. Select it and copy by hand.'); break;
       case 'sound': store.set('sound', !store.get('sound', true)); settingsSheet(); break;
       case 'copy-key': toast(await copyText(S.user.inviteKey) ? 'Invite key copied' : 'Couldn’t copy. Select the key and copy it by hand.'); break;
       case 'copy-link': toast(await copyText(`${location.origin}/?invite=${encodeURIComponent(S.user.inviteKey)}`) ? 'Sign-up link copied' : 'Couldn’t copy the link'); break;
@@ -904,7 +984,8 @@ document.addEventListener('click', async (e) => {
         openSheet(`${sheetHead('Change password')}
           <form class="stack" data-form="password">
             <div class="field"><label for="pc">Current password</label><input class="input" id="pc" name="current" type="password" autocomplete="current-password" required></div>
-            <div class="field"><label for="pn">New password (at least 8 characters)</label><input class="input" id="pn" name="next" type="password" autocomplete="new-password" minlength="8" required></div>
+            <div class="field"><label for="pn">New password</label><input class="input" id="pn" name="next" type="password" autocomplete="new-password" minlength="${config.passwordMin || 10}" maxlength="256" required>
+              <span class="hint">At least ${config.passwordMin || 10} characters. A few random words works well. Other devices get signed out.</span></div>
             <p class="form-error"></p><button class="btn primary block">Change password</button></form>`);
         break;
       case 'logout': await api('POST', '/api/logout'); S = null; renderAuth(); break;
@@ -936,6 +1017,11 @@ document.addEventListener('submit', async (e) => {
         if (urlInvite) history.replaceState(null, '', '/');
         if (f.dataset.form === 'register') config.needsInvite = true;
         await api('GET', '/api/state');
+        break;
+      case 'reset':
+        await api('POST', '/api/reset-password', { username: formVal(f, 'username'), code: formVal(f, 'code'), password: formVal(f, 'password') });
+        await api('GET', '/api/state');
+        toast('Password changed. You’re signed in.');
         break;
       case 'add-item': {
         const kind = f.querySelector('input[name="kind"]:checked')?.value || 'hobby';
@@ -997,7 +1083,7 @@ document.addEventListener('submit', async (e) => {
     }
   } catch (err) {
     if (errEl) errEl.textContent = err.message;
-    else if (f.dataset.form === 'login' || f.dataset.form === 'register') { const a = $('#auth-error'); if (a) a.textContent = err.message; }
+    else if (['login', 'register', 'reset'].includes(f.dataset.form)) { const a = $('#auth-error'); if (a) a.textContent = err.message; }
     else toast(err.message);
   } finally {
     if (btn && btn.isConnected) btn.disabled = false;

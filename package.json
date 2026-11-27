@@ -6,7 +6,8 @@
   "private": true,
   "engines": { "node": ">=22.5" },
   "scripts": {
-    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning server.js"
+    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning --disallow-code-generation-from-strings server.js",
+    "test": "bash test/security.sh"
   },
   "license": "MIT"
 }

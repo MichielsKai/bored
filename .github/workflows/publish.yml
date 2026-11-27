@@ -5,11 +5,13 @@ name: Test and publish
 on:
   push:
     branches: [main]
+  # weekly rebuild so Alpine and Node security patches reach the Pi even without code changes
+  schedule:
+    - cron: '23 3 * * 1'
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish
@@ -25,20 +27,15 @@ jobs:
           node-version: 22
       - name: Syntax check
         run: node --check server.js && node --check public/app.js
-      - name: Smoke test
-        run: |
-          DATA_DIR=$(mktemp -d) PORT=3999 node --experimental-sqlite --disable-warning=ExperimentalWarning server.js &
-          for i in $(seq 1 20); do curl -fs localhost:3999/healthz && break; sleep 0.5; done
-          curl -fs localhost:3999/api/config
-          curl -fs -o /dev/null localhost:3999/
-          curl -fs -c jar -H 'Content-Type: application/json' -d '{"username":"ci-admin","password":"password123"}' localhost:3999/api/register
-          curl -fs -b jar -H 'Content-Type: application/json' -d '{"name":"Test"}' localhost:3999/api/items > /dev/null
-          curl -fs -b jar localhost:3999/api/state > /dev/null
-          echo "Smoke test passed"
+      - name: Security tests
+        run: node --experimental-sqlite --disable-warning=ExperimentalWarning test/security.js
 
   publish:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Image name and version
