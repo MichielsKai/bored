@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { DatabaseSync } = require('node:sqlite');
+const { scoring } = require('./score');
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -104,6 +105,21 @@ CREATE TABLE IF NOT EXISTS known_devices (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS friend_requests (
+  from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (from_id, to_id)
+);
+CREATE TABLE IF NOT EXISTS friendships (
+  a INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  b INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (a, b),
+  CHECK (a < b)
+);
+CREATE INDEX IF NOT EXISTS idx_friend_b ON friendships(b);
+CREATE INDEX IF NOT EXISTS idx_requests_to ON friend_requests(to_id);
 CREATE TABLE IF NOT EXISTS password_resets (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -128,6 +144,7 @@ db.exec(`UPDATE auth_sessions SET sid = lower(hex(randomblob(8))) WHERE sid = ''
          UPDATE auth_sessions SET last_seen = strftime('%s','now') * 1000 WHERE last_seen = 0;`);
 
 const q = (sql) => db.prepare(sql);
+const score = scoring(db);
 const tx = (fn) => {
   db.exec('BEGIN IMMEDIATE');
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -488,9 +505,16 @@ function ownItem(user, itemId) {
   if (!item) throw new HttpError(404, 'That item no longer exists');
   return item;
 }
-function addLog(user, itemId, minutes, endedAt, source) {
+// Saves a session with its points; returns what was earned, for the app to celebrate.
+function addLog(user, item, minutes, endedAt, source, fromSpin = false) {
   if (q('SELECT COUNT(*) AS n FROM time_logs WHERE user_id = ?').get(user.id).n >= 20_000) bad('You’ve reached the maximum number of sessions');
-  q('INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source) VALUES (?, ?, ?, ?, ?)').run(user.id, itemId, minutes, endedAt, source);
+  const now = Date.now();
+  const e = score.scoreSession({ userId: user.id, item, minutes, endedAt, source, fromSpin, now });
+  q(`INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source, points, scored_minutes, multiplier, bonuses, created_at, from_spin)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(user.id, item.id, minutes, endedAt, source, e.points, e.scoredMinutes, e.multiplier, JSON.stringify(e.bonuses), now, fromSpin ? 1 : 0);
+  const milestone = score.milestone(user.id, endedAt, now);
+  return { ...e, minutes, base: e.scoredMinutes * 10, milestone, total: e.points + (milestone ? milestone.points : 0) };
 }
 function fmtH(min) { return `${Math.round((min / 60) * 10) / 10} h`; }
 
@@ -512,7 +536,9 @@ function buildState(user) {
       ...(user.is_admin ? { inviteKey: getInviteKey(), userCount: userCount() } : {}),
     },
     items,
-    timer: q(`SELECT t.item_id, t.started_at, i.name AS item_name FROM timers t
+    score: score.summary(user.id),
+    friendRequests: q('SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?').get(user.id).n,
+    timer: q(`SELECT t.item_id, t.started_at, t.from_spin, i.name AS item_name FROM timers t
               JOIN items i ON i.id = t.item_id WHERE t.user_id = ?`).get(user.id) || null,
     bank: {
       earnedMinutes: earned,
@@ -522,7 +548,7 @@ function buildState(user) {
       progressMinutes: balance > 0 ? balance % cost : 0,
       purchasesCount: q('SELECT COUNT(*) AS n FROM purchases WHERE user_id = ?').get(user.id).n,
     },
-    logs: q(`SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, i.name AS item_name
+    logs: q(`SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, l.points, i.name AS item_name
              FROM time_logs l JOIN items i ON i.id = l.item_id
              WHERE l.user_id = ? AND l.ended_at > ? ORDER BY l.ended_at DESC LIMIT 2000`).all(user.id, Date.now() - 70 * DAY),
     wishes: q('SELECT id, name, price, created_at, bought_at FROM wishes WHERE user_id = ? ORDER BY bought_at IS NOT NULL, created_at DESC').all(user.id),
@@ -699,8 +725,90 @@ route('GET', '/api/export', true, (req, res, body, user) => {
   return {
     exportedAt: new Date().toISOString(),
     ...buildState(user),
-    logs: q('SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, i.name AS item_name FROM time_logs l JOIN items i ON i.id = l.item_id WHERE l.user_id = ? ORDER BY ended_at').all(user.id),
+    logs: q('SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, l.points, l.multiplier, l.bonuses, i.name AS item_name FROM time_logs l JOIN items i ON i.id = l.item_id WHERE l.user_id = ? ORDER BY ended_at').all(user.id),
+    bonuses: q('SELECT kind, points, label, created_at FROM score_events WHERE user_id = ? ORDER BY created_at').all(user.id),
   };
+});
+
+// --- friends
+// Friends see each other's points, hours and streak. Nothing else: not what you play,
+// not your wishlist. Everyone on this server is invited, so finding people by username is fine.
+const pairOf = (x, y) => (x < y ? [x, y] : [y, x]);
+const areFriends = (x, y) => !!q('SELECT 1 FROM friendships WHERE a = ? AND b = ?').get(...pairOf(x, y));
+function friendIds(userId) {
+  return q('SELECT b AS id FROM friendships WHERE a = ? UNION SELECT a AS id FROM friendships WHERE b = ?').all(userId, userId).map((r) => r.id);
+}
+function otherUser(user, username) {
+  const name = String(username || '').trim().slice(0, 64);
+  const u = name && q('SELECT id, username FROM users WHERE username = ?').get(name);
+  if (!u) throw new HttpError(404, 'Nobody here has that username');
+  if (u.id === user.id) bad('That’s you');
+  return u;
+}
+function friendsView(user) {
+  const now = Date.now();
+  const ids = [user.id, ...friendIds(user.id)];
+  const names = new Map(q(`SELECT id, username FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => [r.id, r.username]));
+  const periods = { week: score.startOfWeek(now), month: score.startOfMonth(now), all: 0 };
+  const board = {};
+  for (const [period, since] of Object.entries(periods)) {
+    board[period] = ids.map((id) => {
+      const p = score.pointsSince(id, since);
+      return { username: names.get(id), points: p.points, minutes: p.minutes, streak: score.currentStreak(id, now).days, you: id === user.id };
+    }).sort((x, y) => y.points - x.points || y.minutes - x.minutes || x.username.localeCompare(y.username))
+      .map((e, i) => ({ ...e, rank: i + 1 }));
+  }
+  return {
+    board,
+    friends: ids.slice(1).map((id) => names.get(id)).sort((x, y) => x.localeCompare(y)),
+    incoming: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.from_id WHERE r.to_id = ? ORDER BY r.created_at DESC').all(user.id)
+      .map((r) => ({ username: r.username, createdAt: r.created_at })),
+    outgoing: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.to_id WHERE r.from_id = ? ORDER BY r.created_at DESC').all(user.id)
+      .map((r) => ({ username: r.username, createdAt: r.created_at })),
+  };
+}
+route('GET', '/api/friends', true, (req, res, body, user) => friendsView(user));
+route('POST', '/api/friends/request', true, (req, res, body, user) => {
+  limit(req, 'friend-request', 30, 3600_000);
+  const other = otherUser(user, body.username);
+  if (areFriends(user.id, other.id)) throw new HttpError(409, `You and ${other.username} are already friends`);
+  if (q('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?').get(other.id, user.id)) {
+    // they already asked you: that's a yes
+    tx(() => {
+      q('INSERT OR IGNORE INTO friendships (a, b, created_at) VALUES (?, ?, ?)').run(...pairOf(user.id, other.id), Date.now());
+      q('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)').run(user.id, other.id, other.id, user.id);
+    });
+    return { ...friendsView(user), accepted: other.username };
+  }
+  if (friendIds(user.id).length >= 100) bad('You can have up to 100 friends');
+  if (q('SELECT COUNT(*) AS n FROM friend_requests WHERE from_id = ?').get(user.id).n >= 50) bad('You have too many open requests. Cancel a few first.');
+  q('INSERT OR IGNORE INTO friend_requests (from_id, to_id, created_at) VALUES (?, ?, ?)').run(user.id, other.id, Date.now());
+  return { ...friendsView(user), sent: other.username };
+});
+route('POST', '/api/friends/accept', true, (req, res, body, user) => {
+  const other = otherUser(user, body.username);
+  if (!q('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?').get(other.id, user.id)) throw new HttpError(404, 'That request no longer exists');
+  if (friendIds(user.id).length >= 100) bad('You can have up to 100 friends');
+  tx(() => {
+    q('INSERT OR IGNORE INTO friendships (a, b, created_at) VALUES (?, ?, ?)').run(...pairOf(user.id, other.id), Date.now());
+    q('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)').run(user.id, other.id, other.id, user.id);
+  });
+  return friendsView(user);
+});
+route('POST', '/api/friends/decline', true, (req, res, body, user) => {
+  const other = otherUser(user, body.username);
+  q('DELETE FROM friend_requests WHERE from_id = ? AND to_id = ?').run(other.id, user.id);
+  return friendsView(user);
+});
+route('POST', '/api/friends/cancel', true, (req, res, body, user) => {
+  const other = otherUser(user, body.username);
+  q('DELETE FROM friend_requests WHERE from_id = ? AND to_id = ?').run(user.id, other.id);
+  return friendsView(user);
+});
+route('POST', '/api/friends/remove', true, (req, res, body, user) => {
+  const other = otherUser(user, body.username);
+  q('DELETE FROM friendships WHERE a = ? AND b = ?').run(...pairOf(user.id, other.id));
+  return friendsView(user);
 });
 
 // --- admin
@@ -758,7 +866,8 @@ route('PATCH', '/api/items/:id', true, (req, res, body, user, p) => {
   const archived = body.archived !== undefined ? (body.archived ? 1 : 0) : item.archived;
   q('UPDATE items SET name = ?, kind = ?, archived = ? WHERE id = ?').run(name, kind, archived, item.id);
   if (archived) q('DELETE FROM timers WHERE user_id = ? AND item_id = ?').run(user.id, item.id);
-  return buildState(user);
+  const bonus = archived && !item.archived ? score.finishBonus(user.id, { ...item, name, kind }) : null;
+  return { ...buildState(user), bonus };
 });
 route('DELETE', '/api/items/:id', true, (req, res, body, user, p) => {
   const item = ownItem(user, p.id);
@@ -771,7 +880,7 @@ route('POST', '/api/timer/start', true, (req, res, body, user) => {
   const item = ownItem(user, body.itemId);
   if (item.archived) bad('Put it back on the wheel first');
   if (q('SELECT 1 FROM timers WHERE user_id = ?').get(user.id)) bad('A timer is already running. Stop it first.');
-  q('INSERT INTO timers (user_id, item_id, started_at) VALUES (?, ?, ?)').run(user.id, item.id, Date.now());
+  q('INSERT INTO timers (user_id, item_id, started_at, from_spin) VALUES (?, ?, ?, ?)').run(user.id, item.id, Date.now(), body.fromSpin === true ? 1 : 0);
   return buildState(user);
 });
 route('POST', '/api/timer/stop', true, (req, res, body, user) => {
@@ -782,12 +891,13 @@ route('POST', '/api/timer/stop', true, (req, res, body, user) => {
   let minutes = Math.min(elapsed, 24 * 60);
   if (body.minutes !== undefined) minutes = Math.min(int(body.minutes, 'Minutes', 0, 24 * 60), Math.max(elapsed, 1));
   const before = buildState(user).bank.unlocks;
-  tx(() => {
+  const item = q('SELECT * FROM items WHERE id = ?').get(t.item_id);
+  const earned = tx(() => {
     q('DELETE FROM timers WHERE user_id = ?').run(user.id);
-    if (minutes >= 1) addLog(user, t.item_id, minutes, now, 'timer');
+    return minutes >= 1 && item ? addLog(user, item, minutes, now, 'timer', !!t.from_spin) : null;
   });
   const state = buildState(user);
-  return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before };
+  return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before, earned };
 });
 route('POST', '/api/timer/cancel', true, (req, res, body, user) => {
   q('DELETE FROM timers WHERE user_id = ?').run(user.id);
@@ -804,9 +914,9 @@ route('POST', '/api/logs', true, (req, res, body, user) => {
     endedAt = Math.min(Math.round(d), Date.now());
   }
   const before = buildState(user).bank.unlocks;
-  addLog(user, item.id, minutes, endedAt, 'manual');
+  const earned = tx(() => addLog(user, item, minutes, endedAt, 'manual'));
   const state = buildState(user);
-  return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before };
+  return { ...state, logged: minutes, newUnlocks: state.bank.unlocks - before, earned };
 });
 route('DELETE', '/api/logs/:id', true, (req, res, body, user, p) => {
   const r = q('DELETE FROM time_logs WHERE id = ? AND user_id = ?').run(id(p.id), user.id);

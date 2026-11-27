@@ -6,6 +6,7 @@ Spin a wheel of the hobbies, games and projects you already own. Do the thing, l
 - **Time**: live timer that keeps running across devices, or log hours afterwards.
 - **Unlocks**: every *X* hours (default 20) earns one purchase. Unlocks stack; buying uses one.
 - **Wishlist**: park things you want instead of buying them now.
+- **Points & friends**: sessions earn points with streak and other bonuses; add friends and compare on a weekly, monthly and all-time leaderboard.
 - **Accounts**: invite only. The first account becomes the admin and gets the invite key.
 
 No npm dependencies: Node's built-in HTTP server, crypto (scrypt passwords) and SQLite.

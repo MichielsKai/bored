@@ -373,6 +373,71 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal((await req('GET', '/api/state', { cookie: bob })).status, 200);
   });
 
+  console.log('\nFriends & points');
+  let f1, f2, f3;
+  await check('friends: requests, acceptance and privacy', async () => {
+    f1 = (await post('/api/register', { username: 'fiona', password: STRONG, invite: (await req('GET', '/api/state', { cookie: admin })).json.user.inviteKey })).cookie;
+    const inv = (await req('GET', '/api/state', { cookie: admin })).json.user.inviteKey;
+    f2 = (await post('/api/register', { username: 'gus', password: STRONG, invite: inv })).cookie;
+    f3 = (await post('/api/register', { username: 'hana', password: STRONG, invite: inv })).cookie;
+    assert.equal((await post('/api/friends/request', { username: 'fiona' }, { cookie: f1 })).status, 400, 'friended yourself');
+    assert.equal((await post('/api/friends/request', { username: 'nobody-at-all' }, { cookie: f1 })).status, 404);
+    assert.equal((await post('/api/friends/accept', { username: 'gus' }, { cookie: f1 })).status, 404, 'accepted a request that was never sent');
+    assert.equal((await post('/api/friends/request', { username: 'gus' }, { cookie: f1 })).status, 200);
+    // before gus accepts, fiona still can't see him
+    let v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    assert.deepEqual(v.board.week.map((e) => e.username), ['fiona']);
+    assert.equal((await post('/api/friends/accept', { username: 'fiona' }, { cookie: f2 })).status, 200);
+    v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    assert.deepEqual(v.board.week.map((e) => e.username).sort(), ['fiona', 'gus']);
+    // hana isn't anyone's friend: she sees only herself, and nobody sees her
+    v = (await req('GET', '/api/friends', { cookie: f3 })).json;
+    assert.deepEqual(v.board.all.map((e) => e.username), ['hana']);
+    assert.ok(!JSON.stringify((await req('GET', '/api/friends', { cookie: f1 })).json).includes('hana'));
+  });
+  await check('friends only see points, hours and streak, never items or wishlist', async () => {
+    const st = await post('/api/items', { name: 'secret-hobby-xyz' }, { cookie: f2 });
+    await post('/api/logs', { itemId: st.json.items[0].id, minutes: 30 }, { cookie: f2 });
+    await post('/api/wishes', { name: 'secret-wish-xyz' }, { cookie: f2 });
+    const v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    const gus = v.board.week.find((e) => e.username === 'gus');
+    assert.deepEqual(Object.keys(gus).sort(), ['minutes', 'points', 'rank', 'streak', 'username', 'you']);
+    assert.ok(gus.points > 0);
+    assert.ok(!JSON.stringify(v).includes('secret'));
+  });
+  await check('asking someone who already asked you makes you friends', async () => {
+    await post('/api/friends/request', { username: 'hana' }, { cookie: f1 });
+    const r = await post('/api/friends/request', { username: 'fiona' }, { cookie: f3 });
+    assert.equal(r.json.accepted, 'fiona');
+    assert.equal((await post('/api/friends/request', { username: 'fiona' }, { cookie: f3 })).status, 409);
+  });
+  await check('removing a friend hides you from each other again', async () => {
+    await post('/api/friends/remove', { username: 'hana' }, { cookie: f1 });
+    assert.ok(!JSON.stringify((await req('GET', '/api/friends', { cookie: f3 })).json.board).includes('fiona'));
+  });
+  await check('points can’t be set by the client or farmed with old time', async () => {
+    const st = await post('/api/items', { name: 'farm' }, { cookie: f3 });
+    const itemId = st.json.items.find((i) => i.name === 'farm').id;
+    const r = await post('/api/logs', { itemId, minutes: 60, points: 999999, multiplier: 50, endedAt: Date.now() - 3 * 86400_000 }, { cookie: f3 });
+    assert.equal(r.json.earned.points, 0, 'old time earned points');
+    const r2 = await post('/api/logs', { itemId, minutes: 60, points: 999999 }, { cookie: f3 });
+    assert.ok(r2.json.earned.points <= 60 * 10 * 1.2, `got ${r2.json.earned.points}`);
+    for (let i = 0; i < 3; i++) await post('/api/logs', { itemId, minutes: 24 * 60 }, { cookie: f3 });
+    assert.equal(r2.json.score.today <= 8 * 60 * 10 * 4, true);
+    const sum = (await req('GET', '/api/state', { cookie: f3 })).json.score.today;
+    assert.ok(sum <= 8 * 60 * 10 * 2.6, `daily cap broken: ${sum}`);
+  });
+  await check('the wheel bonus only applies to a real timer started from a spin', async () => {
+    const st = await post('/api/items', { name: 'wheel' }, { cookie: f3 });
+    const itemId = st.json.items.find((i) => i.name === 'wheel').id;
+    const r = await post('/api/logs', { itemId, minutes: 30, fromSpin: true }, { cookie: f3 });
+    assert.ok(!r.json.earned.bonuses.some((b) => b.key === 'wheel'));
+    await post('/api/timer/start', { itemId, fromSpin: 'yes' }, { cookie: f3 });
+    const t = (await req('GET', '/api/state', { cookie: f3 })).json.timer;
+    assert.equal(t.from_spin, 0, 'non-boolean fromSpin accepted');
+    await post('/api/timer/cancel', {}, { cookie: f3 });
+  });
+
   console.log('\nStorage');
   await check('database files are private to the app user', async () => {
     const mode = fs.statSync(path.join(DATA, 'bored.db')).mode & 0o777;

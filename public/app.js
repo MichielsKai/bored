@@ -94,6 +94,9 @@ const ICON = {
   shop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M4.5 8h15l-1.2 11.1a2 2 0 0 1-2 1.9H7.7a2 2 0 0 1-2-1.9L4.5 8Z"/><path d="M8.5 10V7a3.5 3.5 0 0 1 7 0v3"/></svg>',
   stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h16"/><rect x="5.5" y="11" width="3" height="6" rx="1"/><rect x="10.5" y="5" width="3" height="12" rx="1"/><rect x="15.5" y="8" width="3" height="9" rx="1"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  friends: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 6H5.5a1.5 1.5 0 0 0 0 3H8M16 6h2.5a1.5 1.5 0 0 1 0 3H16"/><path d="M12 13v3M8.5 20h7M10 16h4l.5 4h-5l.5-4Z"/></svg>',
+  flame: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.6 2.3c.4 2.6-.6 4.4-2 6-1.3 1.5-2.6 3-2.6 5.4 0 .9.2 1.7.6 2.4-.9-.6-1.6-1.6-1.9-2.8-1 1.3-1.7 3-1.7 4.7C5 21.1 8.1 24 12 24s7-2.9 7-6.6c0-4.6-3.2-6.8-4.4-10-.5-1.5-.5-3.4-2-5.1Z" transform="scale(.92) translate(1 0)"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z"/></svg>',
   pointer: '<svg viewBox="0 0 30 34"><path d="M15 32c-1 0-1.7-.6-2.2-1.4L4.2 12.8A11.5 11.5 0 1 1 25.8 12.8l-8.6 17.8c-.5.8-1.2 1.4-2.2 1.4Z" fill="currentColor"/></svg>',
 };
 
@@ -101,9 +104,9 @@ const ICON = {
 function render() {
   if (!S) return renderAuth();
   const app = $('#app');
-  const views = { spin: viewSpin, stuff: viewStuff, shop: viewShop, stats: viewStats };
+  const views = { spin: viewSpin, stuff: viewStuff, shop: viewShop, friends: viewFriends, stats: viewStats };
   if (!views[view]) view = 'spin';
-  const tabs = [['spin', 'Spin'], ['stuff', 'My stuff'], ['shop', 'Wishlist'], ['stats', 'Stats']];
+  const tabs = [['spin', 'Spin'], ['stuff', 'My stuff'], ['shop', 'Wishlist'], ['friends', 'Friends'], ['stats', 'Stats']];
   app.innerHTML = `
     <div class="app-wrap">
       <div class="shell">
@@ -116,10 +119,11 @@ function render() {
         <main class="view" id="view">${views[view]()}</main>
       </div>
       <nav class="nav" aria-label="Sections"><div class="nav-inner">
-        ${tabs.map(([k, l]) => `<button data-act="nav" data-v="${k}" ${view === k ? 'aria-current="page"' : ''}><span class="ico">${ICON[k]}</span><span>${l}</span></button>`).join('')}
+        ${tabs.map(([k, l]) => `<button data-act="nav" data-v="${k}" ${view === k ? 'aria-current="page"' : ''}><span class="ico">${ICON[k]}${k === 'friends' && S.friendRequests ? '<i class="dot-badge" aria-label="new friend request"></i>' : ''}</span><span>${l}</span></button>`).join('')}
       </div></nav>
     </div>`;
   if (view === 'spin') drawWheel();
+  if (view === 'friends') { if (F) afterFriendsRender(); loadFriends(); }
   tickTimer();
   // animate progress from where it was, and bump the pill when a buy unlocks
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -189,7 +193,24 @@ function viewSpin() {
         </div>
         ${meter(b)}
       </div>
+      ${streakCard()}
     </section>`;
+}
+
+const nf = new Intl.NumberFormat();
+function streakCard() {
+  const sc = S.score; if (!sc) return '';
+  const left = sc.streakDoneToday ? null : Math.max(1, sc.streakGoal - sc.todayMinutes);
+  const line = sc.streak === 0
+    ? `Do ${left} min today to start a streak`
+    : sc.streakDoneToday
+      ? (sc.nextMilestone ? `${sc.nextMilestone.days - sc.streak} more day${sc.nextMilestone.days - sc.streak === 1 ? '' : 's'} to the ${sc.nextMilestone.days}-day bonus` : 'Legendary streak')
+      : `Do ${left} min today to keep it going`;
+  return `<button class="streak surface ${sc.streak && !sc.streakDoneToday ? 'at-risk' : ''}" data-act="nav" data-v="friends">
+    <span class="flame ${sc.streak ? 'lit' : ''}">${ICON.flame}</span>
+    <span class="main"><b>${sc.streak ? `${sc.streak}-day streak` : 'No streak yet'}${sc.streakBonus ? ` <span class="pill">+${sc.streakBonus}%</span>` : ''}</b><span class="muted small">${line}</span></span>
+    <span class="pts"><b>${nf.format(sc.week)}</b><span class="muted small">points this week</span></span>
+  </button>`;
 }
 
 // --- Stuff
@@ -272,6 +293,130 @@ function viewShop() {
       </div></li>`).join('')}</ul></section>` : ''}`;
 }
 
+// --- Friends & leaderboard
+let F = null, friendsLoadedAt = 0, boardPeriod = store.get('board', 'week');
+const PERIODS = [['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
+// Each person keeps one colour everywhere: their place in the alphabetical list of you + friends.
+const avatarColor = (name) => {
+  const people = F ? [S.user.username, ...F.friends].sort((a, b) => a.localeCompare(b)) : [];
+  const i = people.indexOf(name);
+  return INKS[(i >= 0 ? i : [...name].reduce((a, c) => Math.imul(a ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261)) % INKS.length];
+};
+const avatar = (name) => `<span class="avatar" style="background:${avatarColor(name)}">${esc(name.slice(0, 1).toUpperCase())}</span>`;
+
+async function loadFriends(force = false) {
+  if (!force && Date.now() - friendsLoadedAt < 4000) return;
+  friendsLoadedAt = Date.now();
+  try {
+    F = await api('GET', '/api/friends');
+    if (S) S.friendRequests = F.incoming.length;
+    if (view === 'friends' && $('#view')) { $('#view').innerHTML = viewFriends(); afterFriendsRender(); }
+  } catch { /* shown on next try */ }
+}
+function viewFriends() {
+  if (!F) return `<section class="surface pad"><p class="muted">Loading the leaderboard…</p></section>`;
+  const board = F.board[boardPeriod] || [];
+  const me = board.find((e) => e.you) || { points: 0, rank: 1 };
+  const sc = S.score;
+  const hasFriends = F.friends.length > 0;
+  return `
+    <section class="hero surface">
+      <div class="hero-top">
+        <div><p class="muted small">${PERIODS.find((p) => p[0] === boardPeriod)[1]}</p>
+          <div class="hero-num" id="hero-num" data-to="${me.points}">${nf.format(me.points)}</div>
+          <p class="muted small">points</p></div>
+        <div class="hero-rank">${hasFriends ? `<span class="rank-big">#${me.rank}</span><span class="muted small">of ${board.length}</span><span id="rank-move"></span>` : ''}</div>
+      </div>
+      <div class="hero-stats">
+        <span><span class="flame ${sc.streak ? 'lit' : ''}">${ICON.flame}</span><b>${sc.streak}</b> day streak</span>
+        <span><b>${sc.streakBonus ? `+${sc.streakBonus}%` : '+0%'}</b> streak bonus</span>
+        ${sc.nextMilestone ? `<span><b>+${nf.format(sc.nextMilestone.points)}</b> at ${sc.nextMilestone.days} days</span>` : ''}
+      </div>
+    </section>
+
+    ${F.incoming.length ? `<section class="section"><h2>Friend requests</h2><ul class="list">${F.incoming.map((r) => `<li><div class="plain-row">
+        ${avatar(r.username)}<div class="main"><div class="name">${esc(r.username)}</div><div class="muted small">wants to be friends</div></div>
+        <button class="btn small primary" data-act="friend-accept" data-name="${esc(r.username)}">Accept</button>
+        <button class="icon-btn" data-act="friend-decline" data-name="${esc(r.username)}" aria-label="Decline ${esc(r.username)}">${ICON.x}</button>
+      </div></li>`).join('')}</ul></section>` : ''}
+
+    <section class="section">
+      <div class="seg" role="tablist" aria-label="Leaderboard period">${PERIODS.map(([k, l]) => `<button role="tab" aria-selected="${k === boardPeriod}" data-act="board" data-v="${k}">${l}</button>`).join('')}</div>
+      ${hasFriends ? `<ol class="board">${board.map((e) => `<li>
+          <button class="board-row ${e.you ? 'me' : ''}" ${e.you ? 'disabled' : `data-act="friend" data-name="${esc(e.username)}"`}>
+            <span class="rank r${e.rank}">${e.rank}</span>
+            ${avatar(e.username)}
+            <span class="main"><span class="name">${e.you ? 'You' : esc(e.username)}</span>
+              <span class="muted small">${hm(e.minutes)}${e.streak ? ` <span class="mini-flame">${ICON.flame}</span>${e.streak}` : ''}</span></span>
+            <b class="score">${nf.format(e.points)}</b>
+          </button></li>`).join('')}</ol>`
+      : `<div class="empty surface"><h2>Better with friends</h2><p class="muted">Add someone by their username and see who spends the most time on what they already own.</p></div>`}
+    </section>
+
+    <section class="section">
+      <h2>Add a friend</h2>
+      <form class="row surface pad" data-form="add-friend">
+        <input class="input grow" name="username" placeholder="Their username" autocapitalize="none" spellcheck="false" maxlength="32" required aria-label="Username">
+        <button class="btn primary">Add</button>
+      </form>
+      ${F.outgoing.length ? `<ul class="list">${F.outgoing.map((r) => `<li><div class="plain-row">
+          ${avatar(r.username)}<div class="main"><div class="name">${esc(r.username)}</div><div class="muted small">waiting for them to accept</div></div>
+          <button class="btn small" data-act="friend-cancel" data-name="${esc(r.username)}">Cancel</button></div></li>`).join('')}</ul>` : ''}
+      <p class="hint">Friends see your points, hours and streak. Not what you do or what’s on your wishlist.</p>
+    </section>
+
+    <details class="more section">
+      <summary>How points work</summary>
+      <div class="surface pad stack how">
+        <p><b>10 points per minute</b>, times your multiplier. Every bonus that applies adds to it:</p>
+        <ul>
+          <li><b>Streak</b>: +10% for every day in a row you’ve done 15+ minutes, up to +100%</li>
+          <li><b>Rediscovered</b>: +50% for something untouched for 2 weeks, +100% after a month</li>
+          <li><b>Wheel’s pick</b>: +25% when you start the timer straight from a spin</li>
+          <li><b>Live timer</b>: +20% for timed sessions</li>
+          <li><b>Focus</b>: +20% for an hour or more in one go, +40% for two</li>
+        </ul>
+        <p><b>Bonuses</b>: streak milestones at 3, 7, 14, 30, 60, 100 and 365 days, and 1,000 points for finishing a project you’ve put 2+ hours into.</p>
+        <p class="muted small">Fair play: up to 8 hours a day earn points, and time added more than 2 days later doesn’t.</p>
+      </div>
+    </details>`;
+}
+function afterFriendsRender() {
+  // count your score up from what you saw last time, and show rank changes
+  const el = $('#hero-num'); if (!el) return;
+  const to = Number(el.dataset.to);
+  const key = `seen.${boardPeriod}.${boardPeriod === 'week' ? S.score.weekStart : boardPeriod === 'month' ? new Date().getMonth() : 'all'}`;
+  const seen = store.get(key, { points: 0, rank: null });
+  const from = Math.min(seen.points || 0, to);
+  const board = F.board[boardPeriod] || []; const me = board.find((e) => e.you);
+  if (me && seen.rank && me.rank < seen.rank && F.friends.length) {
+    const m = $('#rank-move'); if (m) { m.className = 'rank-up'; m.textContent = `▲ ${seen.rank - me.rank}`; }
+    SFX.rankUp(); FX.burstFrom($('.rank-big'), { n: 18 });
+  }
+  store.set(key, { points: to, rank: me ? me.rank : null });
+  if (from === to || reducedMotion.matches) return;
+  const t0 = performance.now(), dur = 900;
+  const step = (t) => {
+    if (!el.isConnected) return;
+    const k = Math.min(1, (t - t0) / dur);
+    el.textContent = nf.format(Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3))));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function friendSheet(name) {
+  const get = (p) => (F.board[p] || []).find((e) => e.username === name) || { points: 0, minutes: 0, rank: '-' };
+  const w = get('week'), m = get('month'), a = get('all');
+  openSheet(`<div class="sheet-head"><div class="row">${avatar(name)}<h2>${esc(name)}</h2></div><button class="icon-btn" data-act="close" aria-label="Close">${ICON.x}</button></div>
+    <div class="tiles">
+      <div class="tile"><div class="v">${nf.format(w.points)}</div><div class="k">this week, #${w.rank}</div></div>
+      <div class="tile"><div class="v">${nf.format(m.points)}</div><div class="k">this month</div></div>
+      <div class="tile"><div class="v">${nf.format(a.points)}</div><div class="k">all time</div></div>
+    </div>
+    <p><span class="mini-flame">${ICON.flame}</span> ${w.streak ? `${w.streak}-day streak` : 'No streak right now'}, ${hm(w.minutes)} this week.</p>
+    <button class="btn danger" data-act="friend-remove" data-name="${esc(name)}">Remove friend</button>`);
+}
+
 // --- Stats
 function weekStart(ts) {
   const d = new Date(ts); d.setHours(0, 0, 0, 0);
@@ -305,6 +450,9 @@ function viewStats() {
       <div class="tile surface"><div class="v">${round1(b.earnedMinutes / 60)}</div><div class="k">hours total</div></div>
       <div class="tile surface"><div class="v">${round1(ws[ws.length - 1].minutes / 60)}</div><div class="k">hours this week</div></div>
       <div class="tile surface"><div class="v">${b.purchasesCount}</div><div class="k">buys earned and used</div></div>
+      <div class="tile surface"><div class="v">${nf.format(S.score.week)}</div><div class="k">points this week</div></div>
+      <div class="tile surface"><div class="v">${nf.format(S.score.total)}</div><div class="k">points all time</div></div>
+      <div class="tile surface"><div class="v">${S.score.bestStreak}</div><div class="k">longest streak, days</div></div>
     </section>
 
     <section class="section">
@@ -328,7 +476,7 @@ function viewStats() {
       <h2>Recent sessions</h2>
       ${S.logs.length ? `<ul class="list">${S.logs.slice(0, 20).map((l) => `<li><div class="plain-row">
           <div class="main"><div class="name">${esc(l.item_name)}</div><div class="muted small">${day(l.ended_at)}, ${l.source === 'timer' ? 'timed' : 'added by hand'}</div></div>
-          <b>${hm(l.minutes)}</b>
+          <span class="sess"><b>${hm(l.minutes)}</b>${l.points ? `<span class="muted small">+${nf.format(l.points)} pts</span>` : ''}</span>
           <button class="icon-btn" data-act="log-del" data-id="${l.id}" aria-label="Delete this session">${ICON.x}</button>
         </div></li>`).join('')}</ul>`
       : `<p class="muted">No sessions yet. Spin the wheel and start a timer.</p>`}
@@ -647,6 +795,8 @@ const SFX = (() => {
     chaching: () => { noise({ dur: 0.09, vol: 0.05, freq: 6000, q: 2 }); tone(1568, { type: 'triangle', t: 0.05, dur: 0.12, vol: 0.06 }); tone(2093, { type: 'triangle', t: 0.13, dur: 0.55, vol: 0.06 }); },
     thud: () => tone(200, { dur: 0.13, vol: 0.08, to: 90 }),
     click: () => tone(1200, { type: 'triangle', dur: 0.03, vol: 0.03 }),
+    count: (k) => tone(700 + 900 * k, { type: 'triangle', dur: 0.03, vol: 0.035 }),
+    rankUp: () => { [784, 988, 1319].forEach((f, i) => tone(f, { t: i * 0.08, dur: 0.3, vol: 0.06 })); },
   };
 })();
 const buzz = (pattern) => { try { if (store.get('sound', true)) navigator.vibrate?.(pattern); } catch { /* unsupported */ } };
@@ -681,9 +831,10 @@ function showResult(item) {
       <p class="muted">${item.minutes ? hrs(item.minutes) + ' so far' : 'No time logged yet'}, ${ago(item.last_at)}.</p>
     </div>
     <div class="sheet-actions">
-      <button class="btn primary" data-act="timer-start" data-id="${item.id}">${running ? 'Stop current timer and start this' : 'Start timer'}</button>
+      <button class="btn primary" data-act="timer-start" data-id="${item.id}" data-spin="1">${running ? 'Stop current timer and start this' : 'Start timer'}</button>
       <button class="btn" data-act="log" data-id="${item.id}">Log time</button>
     </div>
+    <p class="hint" style="text-align:center">${ICON.spark.replace('<svg', '<svg class="inline-ico"')} Start the timer now for the +25% wheel’s pick bonus</p>
     <button class="btn ghost" data-act="respin">Spin again</button>`);
   FX.burstFrom($('.result-name', sheet), { n: 22, colors: [colorOf(item), colorOf(item), '#5457E0', '#FFD873'], speed: 9 });
 }
@@ -778,12 +929,50 @@ async function stopTimer() {
 }
 function afterLog(r) {
   closeSheet();
-  if (r.logged >= 1) {
-    toast(`Logged ${hm(r.logged)}. Nice.`);
-    if (!r.newUnlocks) { SFX.coin(); buzz(15); }
-    if (!r.newUnlocks) floatText($('.bankpill'), `+${hm(r.logged)}`);
-  } else toast('Under a minute, so nothing logged.');
+  if (r.logged < 1) { toast('Under a minute, so nothing logged.'); return; }
+  if (r.earned && r.earned.total > 0) { pointsReveal(r); return; }
+  toast(r.earned && r.earned.note ? `Logged ${hm(r.logged)}. ${r.earned.note}.` : `Logged ${hm(r.logged)}. Nice.`);
+  if (!r.newUnlocks) { SFX.coin(); buzz(15); floatText($('.bankpill'), `+${hm(r.logged)}`); }
   celebrate(r.newUnlocks);
+}
+
+// The satisfying bit: base points, then each bonus pops in, the multiplier grows,
+// and the total counts up with rising ticks.
+function pointsReveal(r) {
+  const e = r.earned;
+  const rows = [
+    `<li class="pr-row" style="--d:0"><span>${nf.format(e.scoredMinutes)} min × 10</span><b>${nf.format(e.base)}</b></li>`,
+    ...e.bonuses.map((b, i) => `<li class="pr-row bonus" style="--d:${i + 1}"><span>${ICON.spark.replace('<svg', '<svg class="inline-ico"')}${esc(b.label)}</span><b>+${b.pct}%</b></li>`),
+    ...(e.milestone ? [`<li class="pr-row milestone" style="--d:${e.bonuses.length + 1}"><span>${ICON.flame.replace('<svg', '<svg class="inline-ico"')}${e.milestone.days}-day streak bonus</span><b>+${nf.format(e.milestone.points)}</b></li>`] : []),
+  ];
+  openSheet(`
+    <div class="sheet-head"><p class="result-kicker">You did ${hm(r.logged)}. That’s worth</p><button class="icon-btn" data-act="close" aria-label="Close">${ICON.x}</button></div>
+    <div class="pr-total"><span class="pr-num" id="pr-num">+0</span><span class="pr-unit">points</span>
+      ${e.multiplier > 1 ? `<span class="pr-mult" id="pr-mult">×${e.multiplier.toFixed(2).replace(/0$/, '')}</span>` : ''}</div>
+    <ul class="pr-list">${rows.join('')}</ul>
+    ${e.note ? `<p class="hint">${esc(e.note)}.</p>` : ''}
+    <button class="btn primary block" data-act="points-done" data-unlocks="${r.newUnlocks || 0}">${r.newUnlocks ? 'Nice. And there’s more…' : 'Nice'}</button>`);
+  const steps = rows.length;
+  rows.forEach((_, i) => setTimeout(() => { if (sheet.open) { SFX.tick(); buzz(5); } }, 250 + i * 260));
+  const el = $('#pr-num', sheet);
+  const start = performance.now() + 250 + steps * 260;
+  const dur = reducedMotion.matches ? 1 : 900;
+  let lastTick = 0;
+  const step = (t) => {
+    if (!el.isConnected) return;
+    const k = Math.max(0, Math.min(1, (t - start) / dur));
+    const v = Math.round(e.total * (1 - Math.pow(1 - k, 3)));
+    el.textContent = `+${nf.format(v)}`;
+    if (k > 0 && k < 1 && t - lastTick > 70) { lastTick = t; SFX.count(k); }
+    if (k < 1) requestAnimationFrame(step);
+    else {
+      el.classList.add('done'); $('#pr-mult', sheet)?.classList.add('done');
+      SFX.coin(); buzz([10, 30, 20]);
+      FX.burstFrom(el, { n: 28, speed: 9 });
+      floatText($('.bankpill'), `+${hm(r.logged)}`);
+    }
+  };
+  requestAnimationFrame(step);
 }
 
 // ---------- toast & confetti ----------
@@ -906,10 +1095,10 @@ document.addEventListener('click', async (e) => {
         if (S.timer) {
           const name = S.timer.item_name;
           const r = await api('POST', '/api/timer/stop');
-          if (r.logged >= 1) prev = `Logged ${hm(r.logged)} on ${name}. `;
+          if (r.logged >= 1) prev = `Logged ${hm(r.logged)} on ${name}${r.earned && r.earned.total ? `, +${nf.format(r.earned.total)} points` : ''}. `;
         }
         timerJustStarted = true;
-        await api('POST', '/api/timer/start', { itemId: id });
+        await api('POST', '/api/timer/start', { itemId: id, fromSpin: el.dataset.spin === '1' });
         SFX.start(); buzz(10);
         closeSheet(); toast(prev + 'Timer started. Have fun.'); scrollTo(0, 0);
       }
@@ -918,10 +1107,13 @@ document.addEventListener('click', async (e) => {
       case 'timer-cancel':
         confirmSheet('Discard timer?', `The time on ${esc(S.timer.item_name)} won’t be logged.`, 'Discard', async () => { await api('POST', '/api/timer/cancel'); SFX.thud(); });
         break;
-      case 'archive': await api('PATCH', `/api/items/${id}`, { archived: el.dataset.v === '1' }); closeSheet();
+      case 'archive': {
+        const st = await api('PATCH', `/api/items/${id}`, { archived: el.dataset.v === '1' }); closeSheet();
+        if (st.bonus) { setTimeout(() => { toast(`+${nf.format(st.bonus.points)} points for finishing it`); floatText($('.bankpill'), `+${nf.format(st.bonus.points)} pts`); SFX.fanfare(); FX.cannons(90); }, 100); break; }
         if (el.dataset.v === '1') { toast('Off the wheel. Hours kept.'); SFX.land(); FX.cannons(70); buzz([15, 40, 15]); }
         else SFX.pop();
         break;
+      }
       case 'item-del': {
         const i = S.items.find((x) => x.id === id);
         confirmSheet('Delete this?', `${esc(i.name)} and its ${hrs(i.minutes)} of logged time will be gone for good.`, 'Delete', async () => { await api('DELETE', `/api/items/${id}`); SFX.thud(); });
@@ -948,6 +1140,26 @@ document.addEventListener('click', async (e) => {
         selectedWeek = Number(el.dataset.i); SFX.click(); render(); break;
       }
       case 'settings': settingsSheet(); break;
+      case 'board': boardPeriod = el.dataset.v; store.set('board', boardPeriod); SFX.click(); $('#view').innerHTML = viewFriends(); afterFriendsRender(); break;
+      case 'friend': friendSheet(el.dataset.name); break;
+      case 'friend-accept':
+        F = await api('POST', '/api/friends/accept', { username: el.dataset.name });
+        SFX.rankUp(); FX.burstFrom(el, { n: 20 }); toast(`You and ${el.dataset.name} are now friends`);
+        S.friendRequests = F.incoming.length; render();
+        break;
+      case 'friend-decline':
+        F = await api('POST', '/api/friends/decline', { username: el.dataset.name }); SFX.thud(); S.friendRequests = F.incoming.length; render(); break;
+      case 'friend-cancel':
+        F = await api('POST', '/api/friends/cancel', { username: el.dataset.name }); SFX.thud(); $('#view').innerHTML = viewFriends(); afterFriendsRender(); break;
+      case 'friend-remove': {
+        const name = el.dataset.name;
+        confirmSheet(`Remove ${esc(name)}?`, `You’ll stop seeing each other on the leaderboard. You can add each other again later.`, 'Remove friend', async () => {
+          F = await api('POST', '/api/friends/remove', { username: name }); SFX.thud(); toast(`${name} removed`);
+          if (view === 'friends') { $('#view').innerHTML = viewFriends(); afterFriendsRender(); }
+        });
+        break;
+      }
+      case 'points-done': { const u = Number(el.dataset.unlocks); closeSheet(); if (u) setTimeout(() => celebrate(u), 150); break; }
       case 'session-revoke': await api('POST', '/api/sessions/revoke', { id: el.dataset.id }); SFX.thud(); loadDevices(); break;
       case 'sessions-others':
         confirmSheet('Sign out other devices?', 'Every device except this one will need to sign in again.', 'Sign them out', async () => {
@@ -1060,6 +1272,13 @@ document.addEventListener('submit', async (e) => {
         afterLog(r);
         break;
       }
+      case 'add-friend': {
+        const r = await api('POST', '/api/friends/request', { username: formVal(f, 'username') });
+        F = r; S.friendRequests = r.incoming.length;
+        if (r.accepted) { SFX.rankUp(); toast(`You and ${r.accepted} are now friends`); render(); }
+        else { SFX.pop(); toast(`Request sent to ${r.sent}`); $('#view').innerHTML = viewFriends(); afterFriendsRender(); }
+        break;
+      }
       case 'add-wish':
         { const r = f.querySelector('button').getBoundingClientRect();
           await api('POST', '/api/wishes', { name: formVal(f, 'name'), price: formVal(f, 'price') });
@@ -1101,6 +1320,7 @@ document.addEventListener('visibilitychange', async () => {
     config = c;
   } catch { /* offline */ }
   api('GET', '/api/state').catch(() => {});
+  if (view === 'friends') loadFriends(true);
 });
 let resizeT = null;
 addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (view === 'spin' && !spinning) drawWheel(); }, 120); });
