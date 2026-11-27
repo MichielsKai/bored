@@ -624,6 +624,33 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.ok(gus.feed.some((e) => e.you && e.text === 'won the weekly challenge'));
     assert.equal((await req('GET', '/api/friends', { cookie: f1 })).json.challenge.wins, 0, 'fiona won with nothing');
   });
+  await check('settings: only known settings, only allowed values, only for yourself', async () => {
+    for (const prefs of [{ theme: 'neon' }, { nope: true }, { private: 'yes' }, JSON.parse('{"__proto__": {"isAdmin": true}}'), [], 'dark', null]) {
+      assert.equal((await req('PATCH', '/api/settings', { body: { prefs }, cookie: f1 })).status, 400, JSON.stringify(prefs));
+    }
+    const r = await req('PATCH', '/api/settings', { body: { prefs: { theme: 'dark', accent: 'teal' } }, cookie: f1 });
+    assert.equal(r.json.user.prefs.theme, 'dark'); assert.equal(r.json.user.prefs.accent, 'teal'); assert.equal(r.json.user.prefs.sound, true);
+    assert.equal(r.json.user.isAdmin, false);
+    assert.equal((await req('GET', '/api/state', { cookie: f2 })).json.user.prefs.theme, 'system', 'settings leaked to another account');
+  });
+  await check('privacy settings: hiding moments, turning off nudges and private mode are enforced', async () => {
+    const ev = (await req('GET', '/api/friends', { cookie: f1 })).json.feed.find((e) => e.username === 'gus');
+    assert.ok(ev, 'no moment from gus to test with');
+    await req('PATCH', '/api/settings', { body: { prefs: { shareMoments: false, allowNudges: false } }, cookie: f2 });
+    let v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    assert.ok(!v.feed.some((e) => e.username === 'gus'), 'hidden moment still in the feed');
+    assert.equal((await post('/api/high-five', { eventId: ev.id }, { cookie: f1 })).status, 404, 'high-fived a hidden moment');
+    const g = v.board.week.find((e) => e.username === 'gus');
+    assert.ok(g, 'gus vanished from the leaderboard'); assert.ok(!g.atRisk, 'nudge bell shown for someone who turned nudges off');
+    assert.equal((await post('/api/nudge', { username: 'gus' }, { cookie: f1 })).status, 403);
+    await req('PATCH', '/api/settings', { body: { prefs: { private: true } }, cookie: f2 });
+    v = (await req('GET', '/api/friends', { cookie: f1 })).json;
+    assert.ok(!JSON.stringify(v.board).includes('"gus"') && !JSON.stringify(v.challenge).includes('"gus"') && !JSON.stringify(v.feed).includes('"gus"'), 'private user still visible');
+    assert.ok(v.friends.includes('gus'), 'gus should still be in her friends list');
+    assert.ok((await req('GET', '/api/friends', { cookie: f2 })).json.board.week.some((e) => e.username === 'fiona'), 'private mode hid friends from gus himself');
+    await req('PATCH', '/api/settings', { body: { prefs: { private: false, shareMoments: true, allowNudges: true } }, cookie: f2 });
+    assert.ok((await req('GET', '/api/friends', { cookie: f1 })).json.feed.some((e) => e.username === 'gus'));
+  });
   await check('the offline helper is served from the site root and allowed by the security policy', async () => {
     const r = await req('GET', '/sw.js?v=test');
     assert.equal(r.status, 200);

@@ -59,9 +59,11 @@ for (const f of ['Name', 'Step', 'Username', 'Minutes']) {
 // texts the app translates from a variable (challenges, sort labels)
 for (const m of app.matchAll(/^\s+\w+: \['([^']+)', '([^']+)'\],$/gm)) { samples.add(m[1]); samples.add(m[2]); }
 for (const m of (app.match(/STUFF_SORTS = \{([^}]+)\}/) || ['', ''])[1].matchAll(/'([^']+)'/g)) if (!/^[a-z]+$/.test(m[1])) samples.add(m[1]);
+for (const m of app.matchAll(/\[ICON\.\w+, '([^']+)', '([^']+)'\]/g)) { samples.add(m[1]); samples.add(m[2]); }
+for (const m of (app.match(/const ACCENTS = \{([^}]+)\}/) || ['', ''])[1].matchAll(/(\w+): '#/g)) samples.add(m[1][0].toUpperCase() + m[1].slice(1));
 const achSrc = read('achievements.js');
 for (const m of achSrc.matchAll(/name: '((?:[^'\\]|\\.)*)', desc: '((?:[^'\\]|\\.)*)'/g)) { samples.add(unq(m[1])); samples.add(unq(m[2])); }
-const sameInBoth = new Set(['A–Z', 'Linux', 'Live timer', 'Hobby', 'Game', 'Project', 'Centurion', 'Stopwatch', 'Renaissance']);
+const sameInBoth = new Set(['Indigo', 'Amber', 'A–Z', 'Linux', 'Live timer', 'Hobby', 'Game', 'Project', 'Centurion', 'Stopwatch', 'Renaissance']);
 for (const s of samples) {
   const out = TS(s);
   if (out === s && !sameInBoth.has(s)) fail(`server text stays English: ${s}`);

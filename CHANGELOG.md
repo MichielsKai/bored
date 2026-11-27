@@ -6,6 +6,9 @@ Version numbers are **major.minor.patch**. Kai decides whether a release is mino
 ## Unreleased
 
 ### New
+- **A short tutorial** for new accounts, so you know how the wheel, the timer and earning buys work. You can replay it from Settings.
+- **Personalise** (in Settings): light or dark theme, six accent colours, text size, separate switches for sounds, vibration and confetti, spin length, keeping the screen on during a timer, the timer in the browser tab, how much the wheel favours forgotten things, starting the timer straight after a spin, your currency, and how hours are shown. Your choices follow you to every device.
+- **Privacy choices**: private mode hides you from friends' leaderboards, feeds and challenges; you can also stop sharing your moments, turn off nudges, and turn off the weekly recap and badge popups.
 - **Streak freezes.** Every 7 days in a row earns a freeze, and you can hold 2. Miss a day and one is used up for you, so a sick day doesn't wipe out your streak.
 - **Weekly challenges.** Each week brings a new challenge against your friends, like most time on things you'd forgotten about. The winner gets 500 points.
 - **Nudges.** When a friend's streak still needs today's 15 minutes, a bell shows up next to them on the leaderboard. Tap it to give them a nudge.

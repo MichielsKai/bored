@@ -17,8 +17,7 @@
   --r: 18px;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-mode="dark"] {
     --bg: #111215;
     --surface: #1B1C21;
     --surface-2: #2A2B31;
@@ -32,7 +31,6 @@
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
     color-scheme: dark;
   }
-}
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -170,7 +168,7 @@ svg { display: block; }
 .wheel-area { display: flex; flex-direction: column; align-items: center; gap: 22px; }
 .wheel-wrap { position: relative; width: min(100%, 460px); aspect-ratio: 1; margin-top: 6px; }
 .wheel-wrap canvas { width: 100%; height: 100%; display: block; border-radius: 50%; box-shadow: 0 6px 28px rgba(20, 22, 40, 0.14); }
-@media (prefers-color-scheme: dark) { .wheel-wrap canvas { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5); } }
+:root[data-mode="dark"] .wheel-wrap canvas { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5); }
 .pointer {
   position: absolute; left: 50%; top: -4px; width: 30px; height: 34px; margin-left: -15px;
   transform-origin: 50% 25%; z-index: 2; color: var(--text);
@@ -564,7 +562,8 @@ textarea.input { resize: vertical; min-height: 64px; padding-top: 12px; line-hei
 .freeze-pill { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 8px 1px 6px; border-radius: 999px; background: #DDEEFB; color: #1F5F8F; font-size: 0.8rem; font-weight: 700; vertical-align: 1px; }
 .freeze-pill svg, .mini-ice svg { width: 14px; height: 14px; }
 .mini-ice { display: inline-flex; color: #3A86C2; margin-right: 4px; vertical-align: -2px; }
-@media (prefers-color-scheme: dark) { .freeze-pill { background: #173247; color: #A9D4F5; } .mini-ice { color: #7DBBEA; } }
+:root[data-mode="dark"] .freeze-pill { background: #173247; color: #A9D4F5; }
+:root[data-mode="dark"] .mini-ice { color: #7DBBEA; }
 .goal { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0; text-align: left; cursor: pointer; color: var(--text); margin-top: 10px; }
 .goal .main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .goal .pct { font-weight: 750; font-size: 1.05rem; font-feature-settings: "tnum"; }
@@ -583,7 +582,7 @@ section > .goal:first-child, .goal + .tiles { margin-top: 0; }
 .challenge-head b { font-size: 1.1rem; font-weight: 750; }
 .challenge .trophy { width: 42px; height: 42px; border-radius: 12px; background: #FFF1D6; color: #A86A00; display: grid; place-items: center; flex: none; }
 .challenge .trophy svg { width: 24px; height: 24px; }
-@media (prefers-color-scheme: dark) { .challenge .trophy { background: #3A2C12; color: #F2C46B; } }
+:root[data-mode="dark"] .challenge .trophy { background: #3A2C12; color: #F2C46B; }
 .challenge-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .challenge-list li { display: grid; grid-template-columns: 18px minmax(0, 7.5em) 1fr auto; align-items: center; gap: 10px; font-size: 0.925rem; }
 .challenge-list .rank { color: var(--text-2); font-weight: 650; }
@@ -597,10 +596,52 @@ section > .goal:first-child, .goal + .tiles { margin-top: 0; }
 .nudge-btn { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; border: 0; border-radius: 999px; padding: 7px 12px; background: #FDEBDD; color: #9A4A12; font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
 .nudge-btn svg { width: 16px; height: 16px; }
 .nudge-btn:disabled { background: var(--surface-2); color: var(--text-2); cursor: default; }
-@media (prefers-color-scheme: dark) { .nudge-btn { background: #3D2414; color: #F5B98A; } }
+:root[data-mode="dark"] .nudge-btn { background: #3D2414; color: #F5B98A; }
 
 /* ---------- offline ---------- */
 #offline-bar { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 8px); transform: translateX(-50%); z-index: 50;
   max-width: calc(100% - 24px); white-space: nowrap; padding: 6px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 0.8rem; font-weight: 650; text-align: center; box-shadow: var(--shadow); }
 /* the toast is a popover, so it sits above open sheets (and its Undo button stays clickable) */
 #toast[popover] { inset: auto; margin: 0; border: 0; overflow: visible; left: 50%; bottom: calc(var(--nav-h) + var(--safe-b) + 14px); }
+
+/* ---------- personalise: accent colours and text size ----------
+   Every accent keeps white text readable in light mode and dark text in dark mode (4.5:1 or better). */
+:root[data-accent="teal"] { --accent: #0F7C78; --accent-soft: #DDF1EF; }
+:root[data-accent="rose"] { --accent: #C7345F; --accent-soft: #FBE3EA; }
+:root[data-accent="amber"] { --accent: #A15F06; --accent-soft: #FAEBD3; }
+:root[data-accent="green"] { --accent: #2F7D4F; --accent-soft: #E0F0E6; }
+:root[data-accent="plum"] { --accent: #8B3FB5; --accent-soft: #F0E3F8; }
+:root[data-mode="dark"][data-accent="teal"] { --accent: #4FC7BF; --accent-soft: #12332F; }
+:root[data-mode="dark"][data-accent="rose"] { --accent: #FF8AAE; --accent-soft: #3E1A26; }
+:root[data-mode="dark"][data-accent="amber"] { --accent: #F2B45A; --accent-soft: #3A2A12; }
+:root[data-mode="dark"][data-accent="green"] { --accent: #6FD39A; --accent-soft: #173022; }
+:root[data-mode="dark"][data-accent="plum"] { --accent: #C79BF0; --accent-soft: #2F1C3D; }
+:root[data-text="small"] { font-size: 93.75%; }
+:root[data-text="large"] { font-size: 112.5%; }
+
+/* the personalise sheet */
+.pref-group { display: flex; flex-direction: column; gap: 12px; }
+.pref-group + .pref-group { border-top: 1px solid var(--divider); padding-top: 18px; }
+.pref { display: flex; flex-direction: column; gap: 8px; }
+.pref > span { font-weight: 600; }
+.pref .hint { margin: 0; }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatch { width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer; background: var(--c); box-shadow: inset 0 0 0 2px rgba(0,0,0,.06); }
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--c); }
+.seg.pref-seg { grid-template-columns: repeat(var(--n, 3), 1fr); }
+
+/* tutorial */
+.tour { display: flex; flex-direction: column; gap: 16px; text-align: center; align-items: center; padding-top: 4px; }
+.tour-art { width: 96px; height: 96px; border-radius: 28px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.tour-art svg { width: 52px; height: 52px; }
+.tour h2 { margin: 0; font-size: 1.5rem; }
+.tour p { margin: 0; color: var(--text-2); max-width: 32ch; line-height: 1.5; }
+.tour-dots { display: flex; gap: 6px; }
+.tour-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--surface-2); }
+.tour-dots i.on { background: var(--accent); width: 22px; border-radius: 4px; }
+.tour-actions { display: flex; gap: 10px; width: 100%; }
+.tour-actions .btn { flex: 1; }
+/* large text: give the timer bar's item name room */
+:root[data-text="large"] .timerbar { gap: 8px; }
+:root[data-text="large"] .timerbar .clock { font-size: 1.05rem; }
+:root[data-text="large"] .timerbar .btn { padding: 0 12px; }

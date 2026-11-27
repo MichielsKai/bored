@@ -6,6 +6,9 @@ Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 ## Unreleased
 
 ### Nieuw
+- **Een korte uitleg** voor nieuwe accounts, zodat je weet hoe het rad, de timer en aankopen verdienen werken. Je kunt hem opnieuw bekijken via Instellingen.
+- **Personaliseren** (in Instellingen): licht of donker thema, zes accentkleuren, tekstgrootte, aparte schakelaars voor geluid, trillen en confetti, de duur van een draai, het scherm aan houden tijdens een timer, de timer in het browsertabblad, hoeveel het rad vergeten dingen voortrekt, de timer meteen starten na een draai, je munt en hoe uren getoond worden. Je keuzes volgen je naar elk toestel.
+- **Privacykeuzes**: in privémodus zien vrienden je niet in hun klassement, feed of uitdagingen; je kunt ook stoppen met je momenten te delen, duwtjes uitzetten en de pop-ups voor het weekoverzicht en badges uitzetten.
 - **Reeksbevriezingen.** Elke 7 dagen op rij leveren een bevriezing op, en je kunt er 2 bijhouden. Mis je een dag, dan wordt er automatisch een gebruikt, zodat een ziektedag je reeks niet wegveegt.
 - **Weekuitdagingen.** Elke week een nieuwe uitdaging tegen je vrienden, zoals de meeste tijd aan dingen die je vergeten was. De winnaar krijgt 500 punten.
 - **Duwtjes.** Heeft de reeks van een vriend vandaag nog 15 minuten nodig, dan staat er een belletje naast hen in het klassement. Tik erop om hen een duwtje te geven.

@@ -15,10 +15,37 @@ const KICKERS = [
   'Dust this one off:', 'Your past self bought this for a reason:', 'Here’s your plan:',
 ].map((k) => T(k));
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('bored.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem('bored.' + k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
+
+// ---------- preferences ----------
+// Saved with your account (so phone and laptop match) and kept on this device so the look applies at once.
+const PREF_DEFAULTS = {
+  theme: 'system', accent: 'indigo', textSize: 'normal', sound: true, haptics: true, confetti: true, spin: 'normal',
+  wakeLock: false, tabTitle: false, neglect: 'normal', autoTimer: false, currency: 'EUR', timeFormat: 'decimal',
+  private: false, shareMoments: true, allowNudges: true, popups: true, tourDone: false,
+};
+function prefs() {
+  let live = {};
+  try { live = (S && S.user && S.user.prefs) || {}; } catch { /* S isn't set up yet on the first line of the app */ }
+  return { ...PREF_DEFAULTS, ...store.get('prefs', {}), ...live };
+}
+const pref = (k) => prefs()[k];
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+function applyLook(p = prefs()) {
+  const root = document.documentElement;
+  const dark = p.theme === 'dark' || (p.theme === 'system' && darkQuery.matches);
+  root.dataset.mode = dark ? 'dark' : 'light';
+  root.dataset.accent = p.accent;
+  root.dataset.text = p.textSize;
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.content = dark ? '#111215' : '#F3F4F7'; m.removeAttribute('media'); });
+}
+applyLook();
+darkQuery.addEventListener?.('change', () => applyLook());
 
 let S = null;               // server state
 let config = { firstUser: false, defaultHours: 20 };
@@ -48,7 +75,7 @@ async function api(method, url, body) {
   if (!res.ok) throw new Error(data.error ? TS(data.error) : T('Request failed ({n})', { n: res.status }));
   if (data && Array.isArray(data.items)) setState(data);
   if (data && Array.isArray(data.achievements) && data.achievements.length && url !== '/api/achievements') {
-    const list = data.achievements; enqueue(() => showAchievements(list));
+    const list = data.achievements; if (pref('popups')) enqueue(() => showAchievements(list));
   }
   if (data && Array.isArray(data.nudges) && data.nudges.length) {
     const names = [...new Set(data.nudges.map((n) => n.from))];
@@ -75,7 +102,9 @@ async function api(method, url, body) {
 }
 const now = () => Date.now() + clockOffset;
 function setState(d) {
-  S = d; clockOffset = d.now - Date.now(); render(); checkGoal();
+  S = d; clockOffset = d.now - Date.now();
+  if (S.user && S.user.prefs) { store.set('prefs', S.user.prefs); applyLook(S.user.prefs); }
+  render(); checkGoal();
   store.set('lastState', S);   // opens with this when there's no connection
 }
 const refresh = () => api('GET', '/api/state').catch(() => {});
@@ -170,7 +199,10 @@ addEventListener('offline', () => { if (S) setOffline(true); });
 const nf = new Intl.NumberFormat(LOCALE);
 const nf1 = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 });
 const round1 = (n) => nf1.format(Math.round(n * 10) / 10);   // for display only
-function hrs(min) { return min < 60 && min > 0 ? T('{m} min', { m: min }) : T('{h} h', { h: round1(min / 60) }); }
+function hrs(min) {
+  if (pref('timeFormat') === 'hm' && min >= 60) return hm(min);
+  return min < 60 && min > 0 ? T('{m} min', { m: min }) : T('{h} h', { h: round1(min / 60) });
+}
 function hm(min) { const h = Math.floor(min / 60), m = min % 60; return h ? (m ? T('{h} h {m} min', { h, m }) : T('{h} h', { h })) : T('{m} min', { m }); }
 function clock(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -190,7 +222,8 @@ function listedFor(ts) {
   return d === 0 ? T('added today') : Tn(d, 'on your list for 1 day', 'on your list for {n} days');
 }
 const day = (ts) => new Date(ts).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
-const money = (p) => p == null ? '' : new Intl.NumberFormat(LOCALE, { style: 'currency', currency: 'EUR', maximumFractionDigits: p % 1 ? 2 : 0 }).format(p);
+const money = (p) => p == null ? '' : new Intl.NumberFormat(LOCALE, { style: 'currency', currency: pref('currency'), maximumFractionDigits: p % 1 ? 2 : 0 }).format(p);
+const currencySign = () => ({ EUR: '€', USD: '$', GBP: '£' })[pref('currency')] || '€';
 const colorOf = (item) => INKS[(item.id - 1) % INKS.length];
 const active = () => S.items.filter((i) => !i.archived);
 const snoozed = (i) => i.snoozed_until > now();
@@ -204,10 +237,12 @@ function wheelItems() {
 }
 
 // Neglected things get bigger slices: 1× if touched today, up to 3× after four weeks or never.
+// The "neglect boost" setting: off (equal slices), gentle (up to 2×), normal (3×) or strong (5×).
 function weightOf(item) {
-  if (!item.last_at) return 3;
+  const max = { off: 1, gentle: 2, normal: 3, strong: 5 }[pref('neglect')] || 3;
+  if (!item.last_at) return max;
   const days = (now() - item.last_at) / 86400000;
-  return 1 + Math.min(Math.max(days, 0), 28) / 14;
+  return 1 + (Math.min(Math.max(days, 0), 28) / 28) * (max - 1);
 }
 function odds(item) {
   const list = onWheel();
@@ -505,7 +540,7 @@ function viewShop() {
       <h2>${T('Wishlist')}</h2>
       <form class="row surface pad" data-form="add-wish">
         <input class="input grow" name="name" placeholder="${T('What are you craving?')}" maxlength="80" required aria-label="${T('Wish')}">
-        <input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" placeholder="€" aria-label="${T('Price in euro')}" style="width:84px">
+        <input class="input" name="price" type="number" inputmode="decimal" min="0" step="0.01" placeholder="${currencySign()}" aria-label="${T('Price')}" style="width:84px">
         <button class="btn primary">${T('Add')}</button>
       </form>
       ${wishes.length ? `<ul class="list">${wishes.map((w) => `<li><div class="plain-row">
@@ -951,9 +986,88 @@ function privacySheet() {
 }
 
 // --- Settings
+// --- Personalise: every change saves straight away
+const ACCENTS = { indigo: '#5457E0', teal: '#0F7C78', rose: '#C7345F', amber: '#A15F06', green: '#2F7D4F', plum: '#8B3FB5' };
+function personaliseSheet() {
+  const p = prefs();
+  const seg = (key, opts) => `<div class="seg pref-seg" style="--n:${opts.length}" role="group">${opts.map(([v, l]) =>
+    `<button data-act="pref" data-k="${key}" data-v="${v}" aria-pressed="${p[key] === v}">${l}</button>`).join('')}</div>`;
+  const toggle = (key, label, hint = '') => `<label class="toggle"><input type="checkbox" data-pref="${key}" ${p[key] ? 'checked' : ''}><span class="track"></span><span>${label}${hint ? `<span class="hint" style="display:block">${hint}</span>` : ''}</span></label>`;
+  const row = (label, control, hint = '') => `<div class="pref"><span>${label}</span>${control}${hint ? `<p class="hint">${hint}</p>` : ''}</div>`;
+  openSheet(`${sheetHead(T('Personalise'))}
+    <section class="pref-group"><h3>${T('Look')}</h3>
+      ${row(T('Theme'), seg('theme', [['system', T('Automatic')], ['light', T('Light')], ['dark', T('Dark')]]))}
+      ${row(T('Colour'), `<div class="swatches" role="group" aria-label="${T('Colour')}">${Object.entries(ACCENTS).map(([k, c]) =>
+        `<button class="swatch" style="--c:${c}" data-act="pref" data-k="accent" data-v="${k}" aria-pressed="${p.accent === k}" aria-label="${T(k[0].toUpperCase() + k.slice(1))}"></button>`).join('')}</div>`)}
+      ${row(T('Text size'), seg('textSize', [['small', T('Small')], ['normal', T('Normal')], ['large', T('Large')]]))}
+    </section>
+    <section class="pref-group"><h3>${T('Sound and feel')}</h3>
+      <div class="toggles">
+        ${toggle('sound', T('Sounds'))}
+        ${toggle('haptics', T('Vibration'), T('On phones that support it'))}
+        ${toggle('confetti', T('Confetti and sparkles'))}
+        ${toggle('wakeLock', T('Keep the screen on while a timer runs'))}
+        ${toggle('tabTitle', T('Show the timer in the browser tab'))}
+      </div>
+      ${row(T('Spin length'), seg('spin', [['quick', T('Quick')], ['normal', T('Normal')], ['dramatic', T('Dramatic')]]))}
+    </section>
+    <section class="pref-group"><h3>${T('The wheel')}</h3>
+      ${row(T('Neglect boost'), seg('neglect', [['off', T('Off')], ['gentle', T('Gentle')], ['normal', T('Normal')], ['strong', T('Strong')]]),
+        T('How much bigger a slice gets when you haven’t touched something for a while. Off gives every thing the same chance.'))}
+      <div class="toggles">${toggle('autoTimer', T('Start the timer as soon as the wheel picks'), T('Skips the result screen. You still get the wheel’s pick bonus.'))}</div>
+    </section>
+    <section class="pref-group"><h3>${T('Numbers')}</h3>
+      ${row(T('Currency'), seg('currency', [['EUR', '€'], ['USD', '$'], ['GBP', '£']]))}
+      ${row(T('Hours'), seg('timeFormat', [['decimal', T('{h} h', { h: round1(1.5) })], ['hm', T('{h} h {m} min', { h: 1, m: 30 })]]))}
+    </section>
+    <section class="pref-group"><h3>${T('Friends and privacy')}</h3>
+      <div class="toggles">
+        ${toggle('private', T('Private mode'), T('Friends no longer see you on their leaderboard, in their feed or in challenges. You still see them.'))}
+        ${toggle('shareMoments', T('Share my moments'), T('Streaks, badges and challenge wins in your friends’ feed.'))}
+        ${toggle('allowNudges', T('Friends can nudge me'))}
+        ${toggle('popups', T('Weekly recap and badge popups'), T('Badges still unlock and the recap stays under Stats.'))}
+      </div>
+    </section>
+    <button class="btn block" data-act="settings">${T('Back to settings')}</button>`);
+}
+async function setPref(key, value) {
+  const before = prefs()[key];
+  S.user.prefs = { ...prefs(), [key]: value }; store.set('prefs', S.user.prefs); applyLook(S.user.prefs);
+  if (key === 'wakeLock' || key === 'tabTitle') tickTimer();
+  try { await api('PATCH', '/api/settings', { prefs: { [key]: value } }); }
+  catch (e) { S.user.prefs = { ...prefs(), [key]: before }; applyLook(); toast(e.message); }
+}
+
+// --- Tutorial: a few cards for new people, replayable from Settings
+function tourSheet(step = 0) {
+  const steps = [
+    [ICON.spin, 'Welcome to bored?', 'Got hobbies, games and projects gathering dust? bored? helps you enjoy what you already own before buying more.'],
+    [ICON.stuff, 'Add what you already have', 'Put your hobbies, games and half-finished projects on the wheel. Things you haven’t touched in a while get bigger slices.'],
+    [ICON.clock, 'Spin, then do it', 'Spin the wheel, start the timer and get going. Every minute earns points, with bonuses for streaks, focus and dusting things off.'],
+    [ICON.shop, 'Earn your next buy', 'Every {h} hours on your own stuff unlocks one new purchase. Until then, park what you want on your wishlist.'],
+    [ICON.friends, 'Better with friends', 'Add friends to compare points, play the weekly challenge and keep each other’s streaks going.'],
+  ];
+  const [icon, title, text] = steps[step];
+  const last = step === steps.length - 1;
+  openSheet(`<div class="tour">
+      <div class="tour-art">${icon}</div>
+      <h2>${T(title)}</h2>
+      <p>${T(text, { h: round1(S.user.hoursPerUnlock) })}</p>
+      <div class="tour-dots" aria-label="${esc(T('Step {a} of {b}', { a: step + 1, b: steps.length }))}">${steps.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('')}</div>
+      <div class="tour-actions">
+        ${last ? '' : `<button class="btn" data-act="tour-end">${T('Skip')}</button>`}
+        <button class="btn primary" data-act="${last ? 'tour-end' : 'tour'}" data-v="${step + 1}" ${last ? 'data-start="1"' : ''}>${last ? T('Add my first thing') : T('Next')}</button>
+      </div>
+    </div>`);
+}
+
 function settingsSheet() {
   const u = S.user;
   openSheet(`${sheetHead(T('Settings'))}
+    <button class="version-btn" data-act="personalise">
+      <span class="main"><b>${T('Personalise')}</b><span class="muted small">${T('Theme, colour, sounds, the wheel and privacy')}</span></span>
+      <span class="chev">${ICON.chev}</span>
+    </button>
     <form class="stack" data-form="settings">
       <h3>${T('Hours per new purchase')}</h3>
       <div class="row"><input class="input" id="hpu" name="hours" type="number" min="1" max="500" step="0.25" value="${u.hoursPerUnlock}" aria-label="${T('Hours per new purchase')}" style="width:110px"><button class="btn">${T('Save')}</button></div>
@@ -975,7 +1089,6 @@ function settingsSheet() {
     <div class="sheet-section">
       <h3>${T('Account')}</h3>
       <div class="row wrap">
-        <button class="btn small" data-act="sound">${store.get('sound', true) ? T('Wheel sound on') : T('Wheel sound off')}</button>
         <a class="btn small" href="/api/export" download>${T('Export my data')}</a>
         <button class="btn small" data-act="password">${T('Change password')}</button>
       </div>
@@ -987,6 +1100,10 @@ function settingsSheet() {
     <div class="stack" style="gap:8px">
       <button class="version-btn" data-act="whats-new">
         <span class="main"><b>${T('What’s new')}</b><span class="muted small">${T('You’re on version {v}', { v: esc(config.release || '?') })}</span></span>
+        <span class="chev">${ICON.chev}</span>
+      </button>
+      <button class="version-btn" data-act="tour">
+        <span class="main"><b>${T('Show the tutorial again')}</b><span class="muted small">${T('A quick tour of how bored? works')}</span></span>
         <span class="chev">${ICON.chev}</span>
       </button>
       <button class="version-btn" data-act="privacy">
@@ -1252,9 +1369,9 @@ function spin() {
   const p = win.start + (0.15 + Math.random() * 0.7) * (win.end - win.start);
   const target = -Math.PI / 2 - p;
   const startRot = wheelRot;
-  const turns = reducedMotion.matches ? 1 : 5 + Math.floor(Math.random() * 3);
+  const turns = reducedMotion.matches ? 1 : pref('spin') === 'quick' ? 2 : pref('spin') === 'dramatic' ? 9 + Math.floor(Math.random() * 3) : 5 + Math.floor(Math.random() * 3);
   const endRot = startRot + turns * TAU + mod(target - startRot, TAU);
-  const dur = reducedMotion.matches ? 700 : 4200 + Math.random() * 1200;
+  const dur = reducedMotion.matches ? 700 : { quick: 1500, normal: 4200 + Math.random() * 1200, dramatic: 8000 + Math.random() * 1500 }[pref('spin')] || 4200;
   const t0 = performance.now();
   let last = sliceAtPointer();
   const frame = (t) => {
@@ -1285,7 +1402,7 @@ function land(item) {
     FX.burst(r.left + r.width / 2, r.bottom + 6, { n: 26, colors: [colorOf(item), colorOf(item), '#5457E0', '#FFFFFF'], speed: 8 });
   }
   wheelWinner = item.id;
-  animateDim(1, () => setTimeout(() => showResult(item), reducedMotion.matches ? 0 : 220));
+  animateDim(1, () => setTimeout(() => (pref('autoTimer') && !S.timer ? autoStart(item) : showResult(item)), reducedMotion.matches ? 0 : 220));
 }
 function animateDim(to, done) {
   const from = wheelDim, t0 = performance.now(), dur = reducedMotion.matches ? 1 : 260;
@@ -1304,7 +1421,7 @@ const SFX = (() => {
   // 'ambient' lets sounds mix with your music instead of pausing it (Safari 16.4+), and follows the silent switch.
   try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch { /* unsupported */ }
   function ctx() {
-    if (!store.get('sound', true)) return null;
+    if (!pref('sound')) return null;
     // browsers only allow sound after you've tapped something; popups that open by themselves stay quiet
     if (!ac && navigator.userActivation && !navigator.userActivation.hasBeenActive) return null;
     try {
@@ -1356,7 +1473,7 @@ const SFX = (() => {
     rankUp: () => { [784, 988, 1319].forEach((f, i) => tone(f, { t: i * 0.08, dur: 0.3, vol: 0.06 })); },
   };
 })();
-const buzz = (pattern) => { try { if (store.get('sound', true)) navigator.vibrate?.(pattern); } catch { /* unsupported */ } };
+const buzz = (pattern) => { try { if (pref('haptics')) navigator.vibrate?.(pattern); } catch { /* unsupported */ } };
 
 function tick() {
   const ptr = $('#pointer');
@@ -1379,6 +1496,14 @@ sheet.addEventListener('close', () => setTimeout(runQueue, 350));
 sheet.addEventListener('close', () => { if (wheelWinner && !spinning && $('#wheel')) animateDim(0); else wheelWinner = null; });
 const sheetHead = (title) => `<div class="sheet-head"><h2>${title}</h2><button class="icon-btn" data-act="close" aria-label="${T('Close')}">${ICON.x}</button></div>`;
 
+// "Auto-start timer": the wheel's pick starts timing straight away (with the wheel's-pick bonus).
+async function autoStart(item) {
+  try {
+    timerJustStarted = true;
+    await api('POST', '/api/timer/start', { itemId: item.id, fromSpin: true });
+    SFX.start(); buzz(10); toast(T('Timer started on {name}', { name: item.name }));
+  } catch (e) { toast(e.message); showResult(item); }
+}
 function showResult(item) {
   const kicker = KICKERS[Math.floor(Math.random() * KICKERS.length)];
   const running = S.timer;
@@ -1547,10 +1672,27 @@ function celebrate(newUnlocks) {
 
 // ---------- timer ----------
 let timerInt = null;
+// "Keep screen awake" while a timer runs (where the browser allows it).
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch { wakeLock = null; }
+}
+const TITLE = 'bored?';
 function tickTimer() {
   clearInterval(timerInt);
-  if (!S || !S.timer) return;
-  const upd = () => { const el = $('#clock'); if (el && S.timer) el.textContent = clock(timerMs()); };
+  if (!S || !S.timer) { document.title = TITLE; keepAwake(false); return; }
+  keepAwake(pref('wakeLock') && !S.timer.paused_at);
+  const upd = () => {
+    if (!S || !S.timer) return;
+    const c = clock(timerMs()), el = $('#clock');
+    if (el) el.textContent = c;
+    document.title = pref('tabTitle') ? `${S.timer.paused_at ? '⏸' : '▶'} ${c} · ${S.timer.item_name}` : TITLE;
+  };
   upd(); timerInt = setInterval(upd, 1000);
 }
 async function stopTimer() {
@@ -1638,7 +1780,7 @@ function toast(msg, action) {
 const FX = (() => {
   const cv = $('#confetti'); const ctx = cv.getContext('2d');
   let parts = [], raf = 0, dpr = 1, last = 0;
-  const off = () => reducedMotion.matches;
+  const off = () => reducedMotion.matches || !pref('confetti');
   // the canvas is a popover, so it sits in the top layer above open sheets
   const show = () => { try { if (cv.showPopover) { if (cv.matches(':popover-open')) cv.hidePopover(); cv.showPopover(); } } catch { /* unsupported */ } };
   const hide = () => { try { cv.hidePopover?.(); } catch { /* already hidden */ } };
@@ -1798,6 +1940,20 @@ document.addEventListener('click', async (e) => {
         break;
       case 'log-edit': editLogSheet(id); break;
       case 'goal': goalSheet(); break;
+      case 'personalise': personaliseSheet(); break;
+      case 'pref': {
+        const key = el.dataset.k; let v = el.dataset.v;
+        el.closest('[role="group"]')?.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === el)));
+        await setPref(key, v); SFX.click();
+        if (key === 'spin' || key === 'neglect' || key === 'currency' || key === 'timeFormat') render();
+        break;
+      }
+      case 'tour': tourSheet(Number(el.dataset.v) || 0); break;
+      case 'tour-end':
+        closeSheet();
+        if (!pref('tourDone')) setPref('tourDone', true);
+        if (el.dataset.start) { view = 'stuff'; store.set('view', view); render(); setTimeout(() => $('input[name="name"]')?.focus(), 300); }
+        break;
       case 'nudge':
         F = await api('POST', '/api/nudge', { username: el.dataset.name });
         SFX.pop(); buzz(10); toast(T('Nudge sent to {name}', { name: el.dataset.name }));
@@ -1908,7 +2064,6 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'copy-text': toast(await copyText(el.dataset.text) ? T('Copied') : T('Couldn’t copy. Select it and copy by hand.')); break;
-      case 'sound': store.set('sound', !store.get('sound', true)); settingsSheet(); break;
       case 'lang':
         if (el.dataset.v !== LANG && LANGS[el.dataset.v]) { store.set('lang', el.dataset.v); if (S) store.set('reopen', 'settings'); location.reload(); }
         break;
@@ -1935,6 +2090,13 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+// Personalise: on/off switches save as soon as they change
+document.addEventListener('change', (e) => {
+  const key = e.target.dataset && e.target.dataset.pref;
+  if (!key) return;
+  setPref(key, e.target.checked); SFX.click(); buzz(5);
+  if (key === 'private' && e.target.checked) toast(T('Private mode is on. Friends can’t see you now.'));
+});
 // My stuff: search filters the rows in place, so the keyboard stays open
 document.addEventListener('input', (e) => {
   if (e.target.id !== 'stuff-search') return;
@@ -1957,6 +2119,7 @@ document.addEventListener('submit', async (e) => {
         await api('POST', '/api/' + f.dataset.form, { username: formVal(f, 'username'), password: formVal(f, 'password') });
         config.firstUser = false;
         await api('GET', '/api/state');
+        if (S && !pref('tourDone') && !S.items.length) enqueue(() => tourSheet(0));
         break;
       case 'reset':
         await api('POST', '/api/reset-password', { username: formVal(f, 'username'), code: formVal(f, 'code'), password: formVal(f, 'password') });
@@ -2089,8 +2252,9 @@ document.fonts?.ready.then(() => { if (S && view === 'spin') drawWheel(); });
     // coming back from a language switch in Settings
     if (store.get('reopen', null) === 'settings') { store.set('reopen', null); settingsSheet(); }
     shortcut();
+    if (!pref('tourDone') && !S.items.length) enqueue(() => tourSheet(0));
     announceUpdate();
     const ws = S.score && S.score.weekStart; const prev = ws && new Date(ws); if (prev) prev.setDate(prev.getDate() - 7);
-    if (prev && !store.get(`recap.${prev.getTime()}`, false) && S.logs.length) enqueue(() => recapSheet(true));
+    if (prev && pref('popups') && !store.get(`recap.${prev.getTime()}`, false) && S.logs.length) enqueue(() => recapSheet(true));
   }
 })();

@@ -174,6 +174,7 @@ for (const [t, col, def] of [['timers', 'paused_at', 'INTEGER NOT NULL DEFAULT 0
   ['time_logs', 'edited', 'INTEGER NOT NULL DEFAULT 0'], ['users', 'monthly_goal', 'INTEGER NOT NULL DEFAULT 0']]) {
   if (!hasColumn(t, col)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${col} ${def}`);
 }
+if (!hasColumn('users', 'prefs')) db.exec("ALTER TABLE users ADD COLUMN prefs TEXT NOT NULL DEFAULT '{}'");
 db.exec(`CREATE TABLE IF NOT EXISTS nudges (
   from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -596,6 +597,7 @@ function buildState(user) {
       hoursPerUnlock: user.hours_per_unlock,
       isAdmin: !!user.is_admin,
       monthlyGoal: user.monthly_goal,
+      prefs: prefsOf(q('SELECT prefs FROM users WHERE id = ?').get(user.id).prefs),
       ...(user.is_admin ? { userCount: userCount() } : {}),
     },
     items,
@@ -808,6 +810,16 @@ route('PATCH', '/api/settings', true, (req, res, body, user) => {
     if (!Number.isFinite(h) || h < 1 || h > 500) bad('Hours per unlock must be between 1 and 500');
     q('UPDATE users SET hours_per_unlock = ? WHERE id = ?').run(Math.round(h * 4) / 4, user.id);
   }
+  if (body.prefs !== undefined) {
+    if (!body.prefs || typeof body.prefs !== 'object' || Array.isArray(body.prefs)) bad('Settings must be a list of choices');
+    const current = prefsOf(q('SELECT prefs FROM users WHERE id = ?').get(user.id).prefs);
+    for (const [k, v] of Object.entries(body.prefs)) {
+      if (!Object.hasOwn(PREFS, k)) bad('That setting doesn’t exist');
+      if (!PREFS[k].includes(v)) bad('That choice isn’t allowed for this setting');
+      current[k] = v;
+    }
+    q('UPDATE users SET prefs = ? WHERE id = ?').run(JSON.stringify(current), user.id);
+  }
   if (body.monthlyGoalHours !== undefined) {
     const h = Number(body.monthlyGoalHours);
     if (!Number.isFinite(h) || h < 0 || h > 300) bad('A monthly goal must be between 0 and 300 hours');
@@ -850,6 +862,37 @@ function otherUser(user, username) {
   if (u.id === user.id) bad('That’s you');
   return u;
 }
+// ---------- preferences ----------
+// Each setting has a fixed list of allowed values; anything else is refused.
+const PREFS = {
+  theme: ['system', 'light', 'dark'],
+  accent: ['indigo', 'teal', 'rose', 'amber', 'green', 'plum'],
+  textSize: ['normal', 'small', 'large'],
+  sound: [true, false], haptics: [true, false], confetti: [true, false],
+  spin: ['normal', 'quick', 'dramatic'],
+  wakeLock: [false, true], tabTitle: [false, true],
+  neglect: ['normal', 'off', 'gentle', 'strong'],
+  autoTimer: [false, true],
+  currency: ['EUR', 'USD', 'GBP'],
+  timeFormat: ['decimal', 'hm'],
+  private: [false, true], shareMoments: [true, false], allowNudges: [true, false],
+  popups: [true, false],
+  tourDone: [false, true],
+};
+const PREF_DEFAULTS = Object.fromEntries(Object.entries(PREFS).map(([k, v]) => [k, v[0]]));
+function prefsOf(raw) {
+  let p = {};
+  try { p = JSON.parse(raw || '{}'); } catch { /* broken: defaults */ }
+  const out = { ...PREF_DEFAULTS };
+  for (const k of Object.keys(PREFS)) if (PREFS[k].includes(p[k])) out[k] = p[k];
+  return out;
+}
+const prefsById = (ids) => new Map(ids.length
+  ? q(`SELECT id, prefs FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => [r.id, prefsOf(r.prefs)])
+  : []);
+// Friends who chose private mode don't show up for others: not on leaderboards, in feeds or in challenges.
+const visibleFriendIds = (userId) => { const ids = friendIds(userId); const p = prefsById(ids); return ids.filter((id) => !p.get(id).private); };
+
 // ---------- weekly challenge ----------
 // One challenge a week for everyone, in turn. You play it against your friends; whoever is on top
 // when the week ends gets 500 points. Only time that earned points counts (no backfilling).
@@ -877,7 +920,7 @@ function awardChallenge(user, now = Date.now()) {
   challengeChecked.set(user.id, lastWeek);
   const day = dayKey(lastWeek);
   if (q("SELECT 1 FROM score_events WHERE user_id = ? AND kind = 'challenge' AND day = ?").get(user.id, day)) return;
-  const ids = [user.id, ...friendIds(user.id)];
+  const ids = [user.id, ...visibleFriendIds(user.id)];
   if (ids.length < 2) return;
   const { challenge, values } = challengeStandings(ids, lastWeek);
   const mine = values[0].value, top = Math.max(...values.map((v) => v.value));
@@ -899,7 +942,8 @@ function challengeView(user, ids, names, now = Date.now()) {
 
 function friendsView(user) {
   const now = Date.now();
-  const ids = [user.id, ...friendIds(user.id)];
+  const ids = [user.id, ...visibleFriendIds(user.id)];
+  const prefs = prefsById(ids);
   const names = new Map(q(`SELECT id, username FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => [r.id, r.username]));
   const periods = { week: score.startOfWeek(now), month: score.startOfMonth(now), all: 0 };
   const streaks = new Map(ids.map((id) => [id, score.currentStreak(id, now)]));
@@ -910,15 +954,15 @@ function friendsView(user) {
       const p = score.pointsSince(id, since);
       const st = streaks.get(id);
       return { username: names.get(id), points: p.points, minutes: p.minutes, streak: st.days, you: id === user.id,
-        ...(id !== user.id && st.days > 0 && !st.doneToday ? { atRisk: true, nudged: nudged.has(id) } : {}) };
+        ...(id !== user.id && st.days > 0 && !st.doneToday && prefs.get(id).allowNudges ? { atRisk: true, nudged: nudged.has(id) } : {}) };
     }).sort((x, y) => y.points - x.points || y.minutes - x.minutes || x.username.localeCompare(y.username))
       .map((e, i) => ({ ...e, rank: i + 1 }));
   }
   return {
     board,
-    feed: feedFor(user, ids),
+    feed: feedFor(user, ids.filter((id) => id === user.id || prefs.get(id).shareMoments)),
     challenge: challengeView(user, ids, names, now),
-    friends: ids.slice(1).map((id) => names.get(id)).sort((x, y) => x.localeCompare(y)),
+    friends: friendIds(user.id).map((id) => names.get(id) || q('SELECT username FROM users WHERE id = ?').get(id).username).sort((x, y) => x.localeCompare(y)),
     incoming: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.from_id WHERE r.to_id = ? ORDER BY r.created_at DESC').all(user.id)
       .map((r) => ({ username: r.username, createdAt: r.created_at })),
     outgoing: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.to_id WHERE r.from_id = ? ORDER BY r.created_at DESC').all(user.id)
@@ -982,6 +1026,8 @@ route('POST', '/api/nudge', true, (req, res, body, user) => {
   limit(req, 'nudge', 60, 3600_000);
   const other = otherUser(user, body.username);
   if (!areFriends(user.id, other.id)) throw new HttpError(403, 'You can only nudge your friends');
+  const op = prefsById([other.id]).get(other.id);
+  if (op.private || !op.allowNudges) throw new HttpError(403, 'They’ve turned off nudges');
   const st = score.currentStreak(other.id);
   if (!st.days || st.doneToday) bad('Their streak is safe today');
   const r = q('INSERT OR IGNORE INTO nudges (from_id, to_id, day, created_at) VALUES (?, ?, ?, ?)').run(user.id, other.id, dayKey(Date.now()), Date.now());
@@ -1065,7 +1111,8 @@ function feedFor(user, ids) {
 route('POST', '/api/high-five', true, (req, res, body, user) => {
   limit(req, 'high-five', 120, 3600_000);
   const e = q('SELECT id, user_id, created_at FROM score_events WHERE id = ?').get(id(body.eventId));
-  if (!e || e.user_id === user.id || !areFriends(user.id, e.user_id) || Date.now() - e.created_at > 30 * DAY) {
+  const owner = e && prefsById([e.user_id]).get(e.user_id);
+  if (!e || e.user_id === user.id || !areFriends(user.id, e.user_id) || Date.now() - e.created_at > 30 * DAY || owner.private || !owner.shareMoments) {
     throw new HttpError(404, 'You can only high-five your friends’ recent moments');
   }
   q('INSERT OR IGNORE INTO high_fives (from_id, event_id, created_at) VALUES (?, ?, ?)').run(user.id, e.id, Date.now());
