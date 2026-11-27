@@ -3,7 +3,7 @@
 Nederlandse versie van CHANGELOG.md, getoond in de app (Instellingen → Wat is er nieuw) als die in het Nederlands staat.
 Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 
-## Unreleased
+## 1.2.0 — 2026-11-27
 
 ### Nieuw
 - **Er zit iets verstopt in Instellingen.** Blijf scrollen.

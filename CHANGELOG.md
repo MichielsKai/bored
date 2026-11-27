@@ -3,7 +3,7 @@
 This list also appears in the app (Settings → What's new), so it's written for the people using bored?. The Dutch version is CHANGELOG.nl.md: keep both in step.
 Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
-## Unreleased
+## 1.2.0 — 2026-11-27
 
 ### New
 - **Something is hidden in Settings.** Keep scrolling.
