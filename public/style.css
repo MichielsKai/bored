@@ -260,7 +260,7 @@ details.more[open] summary { margin-bottom: 10px; }
 .auth-switch { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 700; cursor: pointer; }
 .note { background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; font-size: 0.925rem; }
 
-/* ---------- invite key ---------- */
+/* ---------- reset code ---------- */
 .key {
   font-size: 1.15rem; font-weight: 700; letter-spacing: 0.06em; text-align: center;
   background: var(--bg); border-radius: 14px; padding: 14px; user-select: all; word-break: break-all;
@@ -388,7 +388,12 @@ dialog#sheet::backdrop { background: rgba(10, 12, 24, 0.4); }
 
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 14px; }
 .seg button { border: 0; background: none; padding: 9px 4px; border-radius: 10px; font-weight: 650; font-size: 0.9rem; color: var(--text-2); cursor: pointer; }
-.seg button[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20,22,40,.12); }
+.seg button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20,22,40,.12); }
+.lang-seg { grid-template-columns: repeat(2, 1fr); max-width: 280px; }
+.auth-foot { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.auth-foot .lang-seg { width: 230px; }
+.privacy h3 { margin-top: 6px; }
+.privacy p { margin: 0; }
 
 .board { list-style: none; margin: 0; padding: 4px 0; background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
 .board li { position: relative; }
@@ -474,7 +479,7 @@ details.release[open] summary { margin-bottom: 8px; }
 .badge.big svg { width: 46px; height: 46px; }
 .ach-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 6px; padding: 16px 8px; }
 .ach { display: flex; flex-direction: column; align-items: center; gap: 6px; border: 0; background: none; cursor: pointer; padding: 0; color: var(--text); min-width: 0; }
-.ach-name { font-size: 0.72rem; font-weight: 600; text-align: center; line-height: 1.2; overflow-wrap: anywhere; }
+.ach-name { font-size: 0.72rem; font-weight: 600; text-align: center; line-height: 1.2; overflow-wrap: anywhere;  hyphens: auto; -webkit-hyphens: auto; }
 .ach-bar { width: 40px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .ach-bar span { display: block; height: 100%; background: var(--accent); }
 .legend { background: #14163A; color: #EEF0FF; padding: 14px 8px 4px; }

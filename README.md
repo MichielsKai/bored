@@ -8,7 +8,8 @@ Spin a wheel of the hobbies, games and projects you already own. Do the thing, l
 - **Wishlist**: park things you want instead of buying them now.
 - **Points & friends**: sessions earn points with streak and other bonuses; add friends, compare on a weekly, monthly and all-time leaderboard, and high-five each other's moments.
 - **Filters, checklists, recaps, achievements**: spin only quick or low-energy things, break projects into steps, get a weekly recap, and collect 50 achievements (5 of them legendary).
-- **Accounts**: invite only. The first account becomes the admin and gets the invite key.
+- **Accounts**: anyone can sign up. The first account becomes the admin.
+- **Languages**: English and Dutch (Nederlands), following the device language, switchable in Settings.
 
 No npm dependencies: Node's built-in HTTP server, crypto (scrypt passwords) and SQLite.
 
@@ -90,20 +91,21 @@ ls data/backups/            # automatic backups made before each update
 | `BORED_PORT` | `3000` | Port on the Pi |
 | `TZ` | `Europe/Brussels` | Timezone |
 | `DEFAULT_HOURS_PER_UNLOCK` | `20` | Hours per purchase for new accounts (each user can change their own) |
+| `MAX_SIGNUPS_PER_DAY` | `100` | Anti-spam cap on new accounts per day for the whole site. When it's hit, sign-up pauses until the next day; existing accounts are unaffected |
+| `PRIVACY_CONTACT` | | An email address shown in the privacy notice for questions and data requests |
 | `BORED_BIND` | detected | `127.0.0.1` = only the Pi itself (your tunnel) can connect; `0.0.0.0` = reachable on your network |
 
 Run `docker compose up -d` after editing `.env`.
 
 ---
 
-## Invite key
+## Admin
 
-As admin, tap the gear icon (top right):
+The first account on a site becomes the admin. As admin, tap the gear icon (top right) → **People** to see who has an account, give someone a one-time password reset code (valid 24 hours), or remove an account. The admin account itself can't be deleted, because it runs the site.
 
-- **Copy key** or **Copy sign-up link** (the link opens sign-up with the key filled in).
-- The key works any number of times.
-- **Make a new key** stops the old key right away. Existing accounts keep working.
-- The admin account can't be deleted, because it holds the invite key.
+## Languages
+
+English is the source text in `public/app.js`, wrapped in `T('…')`. The Dutch lines live in `public/i18n.js`, keyed by the English. Messages from the server (errors, bonus labels, feed lines) are translated on the client by `TS()`. `node test/i18n.js` lists anything without a Dutch line and runs on every build. What's new has a Dutch twin: `CHANGELOG.nl.md`.
 
 ## Security
 
@@ -118,7 +120,7 @@ What's in place, and tested on every build by `test/security.js` (an attack test
 - Hashing runs at most 3 at a time, so a login flood can't exhaust the Pi. Known devices skip the queue.
 
 **Accounts**
-- Sign-up needs the invite key, checked before anything else.
+- Sign-up is open, with a daily cap on new accounts for the whole site (`MAX_SIGNUPS_PER_DAY`) and per-network limits, so a bot can't flood the Pi. Friend requests are capped at 50 a day per account.
 - Admin (Settings → People): see who has an account, give someone a one-time reset code (valid 24 hours), or remove an account.
 - Settings → Signed-in devices: see where you're logged in and sign out other devices. Logins end after 30 days unused (90 days at most). Changing or resetting a password signs out every other device.
 

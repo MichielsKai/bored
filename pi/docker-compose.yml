@@ -12,6 +12,8 @@ services:
     environment:
       - TZ=${TZ:-Europe/Brussels}
       - DEFAULT_HOURS_PER_UNLOCK=${DEFAULT_HOURS_PER_UNLOCK:-20}
+      - MAX_SIGNUPS_PER_DAY=${MAX_SIGNUPS_PER_DAY:-100}
+      - PRIVACY_CONTACT=${PRIVACY_CONTACT:-}
     # Hardening: nothing in the container can be modified except /data,
     # no Linux capabilities, no privilege escalation, capped memory and processes.
     read_only: true

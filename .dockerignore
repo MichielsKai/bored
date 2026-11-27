@@ -4,5 +4,6 @@ node_modules
 .github
 *.md
 !CHANGELOG.md
+!CHANGELOG.nl.md
 .env
 *.log

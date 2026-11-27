@@ -17,6 +17,8 @@ const DEFAULT_HOURS = Number(process.env.DEFAULT_HOURS_PER_UNLOCK || 20);
 const COOKIE_SECURE = process.env.COOKIE_SECURE;             // 'true' | 'false' | unset (auto)
 const TRUST_PROXY = process.env.TRUST_PROXY || 'auto';       // 'auto' | 'always' | 'never'
 const PWNED_CHECK = process.env.PWNED_CHECK !== 'false';     // breached-password check
+const MAX_SIGNUPS_PER_DAY = Number(process.env.MAX_SIGNUPS_PER_DAY || 100); // anti-spam cap for the whole site
+const PRIVACY_CONTACT = String(process.env.PRIVACY_CONTACT || '').slice(0, 200); // shown in the privacy notice
 const APP_VERSION = process.env.APP_VERSION || 'dev';                 // git commit of this build
 const APP_RELEASE = require('./package.json').version;              // release number, e.g. 1.1.0
 const BUILD_DATE = process.env.BUILD_DATE || '';
@@ -374,7 +376,7 @@ async function checkNewPassword(password, username) {
   if (seen > 0) bad('That password has shown up in a data breach, so attackers try it first. Pick a different one.');
 }
 
-// ---------- invite key & reset codes ----------
+// ---------- reset codes ----------
 const KEY_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789';
 function randomCode(groups) {
   // rejection sampling so every character is equally likely
@@ -385,21 +387,12 @@ function randomCode(groups) {
   }
   return out.match(/.{4}/g).join('-');
 }
-function getInviteKey() {
-  let row = q("SELECT value FROM app_settings WHERE key = 'invite_key'").get();
-  if (!row) {
-    q("INSERT INTO app_settings (key, value) VALUES ('invite_key', ?)").run(randomCode(4));
-    row = q("SELECT value FROM app_settings WHERE key = 'invite_key'").get();
-  }
-  return row.value;
-}
 const normKey = (k) => String(k || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 64);
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 function safeEqual(a, b) {
   const x = Buffer.from(sha256(a)), y = Buffer.from(sha256(b));
   return crypto.timingSafeEqual(x, y);
 }
-const inviteMatches = (given) => safeEqual(normKey(given), normKey(getInviteKey()));
 const userCount = () => q('SELECT COUNT(*) AS n FROM users').get().n;
 
 // ---------- input cleaning ----------
@@ -558,7 +551,7 @@ function buildState(user) {
       username: user.username,
       hoursPerUnlock: user.hours_per_unlock,
       isAdmin: !!user.is_admin,
-      ...(user.is_admin ? { inviteKey: getInviteKey(), userCount: userCount() } : {}),
+      ...(user.is_admin ? { userCount: userCount() } : {}),
     },
     items,
     score: score.summary(user.id),
@@ -594,10 +587,11 @@ const route = (method, pattern, auth, handler) => {
 };
 const requireAdmin = (user) => { if (!user.is_admin) throw new HttpError(403, 'Only the admin can do that'); };
 
-// What's new: CHANGELOG.md, parsed once at startup. Unreleased notes only show in dev builds.
-const CHANGELOG = (() => {
+// What's new: CHANGELOG.md (and the Dutch CHANGELOG.nl.md), parsed once at startup.
+// Unreleased notes only show in dev builds.
+function parseChangelog(file) {
   let text = '';
-  try { text = fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8'); } catch { return []; }
+  try { text = fs.readFileSync(path.join(__dirname, file), 'utf8'); } catch { return null; }
   const versions = []; let cur = null, group = null;
   for (const line of text.split('\n')) {
     let m;
@@ -616,32 +610,35 @@ const CHANGELOG = (() => {
   }
   return versions.filter((v) => v.version !== 'Unreleased' || APP_VERSION === 'dev')
     .map((v) => (v.version === 'Unreleased' ? { ...v, version: 'Next version', upcoming: true } : v));
-})();
-route('GET', '/api/changelog', false, () => ({ release: APP_RELEASE, commit: APP_VERSION, versions: CHANGELOG }));
+}
+const CHANGELOGS = { en: parseChangelog('CHANGELOG.md') || [] };
+CHANGELOGS.nl = parseChangelog('CHANGELOG.nl.md') || CHANGELOGS.en;
+route('GET', '/api/changelog', false, (req) => {
+  const lang = new URL(req.url, 'http://local').searchParams.get('lang');
+  return { release: APP_RELEASE, commit: APP_VERSION, versions: CHANGELOGS[lang === 'nl' ? 'nl' : 'en'] };
+});
 
-route('GET', '/api/config', false, () => ({ needsInvite: userCount() > 0, defaultHours: DEFAULT_HOURS, release: APP_RELEASE, version: APP_VERSION, buildDate: BUILD_DATE, passwordMin: PASSWORD_MIN }));
+route('GET', '/api/config', false, () => ({ firstUser: userCount() === 0, privacyContact: PRIVACY_CONTACT, defaultHours: DEFAULT_HOURS, release: APP_RELEASE, version: APP_VERSION, buildDate: BUILD_DATE, passwordMin: PASSWORD_MIN }));
 
 // --- auth
 route('POST', '/api/register', false, async (req, res, body) => {
   limit(req, 'register', 10, 3600_000);
-  // The invite key is checked before anything else, so without it nothing is revealed (not even taken usernames).
-  if (userCount() > 0 && !inviteMatches(body.invite)) {
-    secLog('register-bad-invite', { ip: clientIp(req) });
-    throw new HttpError(403, 'That invite key isn’t valid. Ask the admin for the current one.');
-  }
   const username = str(body.username, 'Username', 3, 32);
   if (!/^[a-zA-Z0-9_.-]+$/.test(username)) bad('Username can only use letters, numbers, dots, dashes and underscores');
   if (q('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'That username is taken');
+  // anti-spam: a cap on new accounts per day for the whole site
+  if (q('SELECT COUNT(*) AS n FROM users WHERE created_at > ?').get(Date.now() - DAY).n >= MAX_SIGNUPS_PER_DAY) {
+    secLog('signup-cap-reached', { ip: clientIp(req) });
+    throw new HttpError(503, 'Sign-ups are paused for today. Try again tomorrow.');
+  }
   await checkNewPassword(body.password, username);
   const passHash = await hashPassword(body.password);
-  // Re-check inside a transaction: two sign-ups racing can't both become admin or skip the invite.
+  // Inside a transaction, so two sign-ups racing can't both become the admin.
   const userId = tx(() => {
-    const first = userCount() === 0;
-    if (!first && !inviteMatches(body.invite)) throw new HttpError(403, 'That invite key isn’t valid. Ask the admin for the current one.');
     if (q('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'That username is taken');
+    const first = userCount() === 0;
     const r = q('INSERT INTO users (username, pass_hash, salt, hours_per_unlock, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(username, passHash, '', DEFAULT_HOURS, first ? 1 : 0, Date.now());
-    if (first) getInviteKey();
     return Number(r.lastInsertRowid);
   });
   secLog('account-created', { user: username, ip: clientIp(req) });
@@ -766,7 +763,7 @@ route('PATCH', '/api/settings', true, (req, res, body, user) => {
 });
 
 route('POST', '/api/account/delete', true, async (req, res, body, user) => {
-  if (user.is_admin) bad('The admin account can’t be deleted, because it holds the invite key.');
+  if (user.is_admin) bad('The admin account can’t be deleted, because it runs the site.');
   await requirePassword(req, user, body.password);
   q('DELETE FROM users WHERE id = ?').run(user.id);
   secLog('account-deleted', { user: user.username, ip: clientIp(req) });
@@ -786,7 +783,7 @@ route('GET', '/api/export', true, (req, res, body, user) => {
 
 // --- friends
 // Friends see each other's points, hours and streak. Nothing else: not what you play,
-// not your wishlist. Everyone on this server is invited, so finding people by username is fine.
+// not your wishlist. You add people by their exact username.
 const pairOf = (x, y) => (x < y ? [x, y] : [y, x]);
 const areFriends = (x, y) => !!q('SELECT 1 FROM friendships WHERE a = ? AND b = ?').get(...pairOf(x, y));
 function friendIds(userId) {
@@ -825,6 +822,7 @@ function friendsView(user) {
 route('GET', '/api/friends', true, (req, res, body, user) => friendsView(user));
 route('POST', '/api/friends/request', true, (req, res, body, user) => {
   limit(req, 'friend-request', 30, 3600_000);
+  if (hit(`friend-request-user:${user.id}`, 50, DAY)) throw new HttpError(429, 'You’ve sent a lot of friend requests today. Try again tomorrow.');
   const other = otherUser(user, body.username);
   if (areFriends(user.id, other.id)) throw new HttpError(409, `You and ${other.username} are already friends`);
   if (q('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?').get(other.id, user.id)) {
@@ -990,12 +988,6 @@ route('GET', '/api/recap', true, (req, res, body, user) => {
 });
 
 // --- admin
-route('POST', '/api/admin/invite', true, (req, res, body, user) => {
-  requireAdmin(user);
-  q("INSERT INTO app_settings (key, value) VALUES ('invite_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(randomCode(4));
-  secLog('invite-key-regenerated', { by: user.username });
-  return buildState(user);
-});
 route('GET', '/api/admin/users', true, (req, res, body, user) => {
   requireAdmin(user);
   return {

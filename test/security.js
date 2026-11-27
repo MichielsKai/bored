@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 
 const PORT = 3900 + Math.floor(Math.random() * 90);
-const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'bored-test-'));
+let DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'bored-test-'));
 const ROOT = path.join(__dirname, '..');
 const EXTERNAL = Object.values(os.networkInterfaces()).flat().find((a) => a.family === 'IPv4' && !a.internal)?.address;
 const externalIsTrusted = !EXTERNAL || /^172\.(1[6-9]|2\d|3[01])\./.test(EXTERNAL);
@@ -19,9 +19,9 @@ const STRONG = 'cactus-lamp-tuesday-river-' + crypto.randomBytes(3).toString('he
 const STRONG2 = 'orbit-mango-velvet-anchor-' + crypto.randomBytes(3).toString('hex');
 
 let server;
-function start() {
+function start(env = {}) {
   server = spawn(process.execPath, ['--experimental-sqlite', '--disable-warning=ExperimentalWarning', '--disallow-code-generation-from-strings', 'server.js'],
-    { cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, PWNED_CHECK: 'false', TRUST_PROXY: 'auto' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, PWNED_CHECK: 'false', TRUST_PROXY: 'auto', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', (d) => { if (process.env.VERBOSE) process.stdout.write(d); });
   server.stderr.on('data', (d) => process.stderr.write(d));
   return waitUp();
@@ -87,7 +87,7 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   }
   await start();
   console.log(`bored? security tests (port ${PORT})`);
-  let admin, inviteKey;
+  let admin;
 
   console.log('\nCrash resistance');
   await check('malformed URL encoding does not crash the server', async () => {
@@ -128,15 +128,14 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   });
 
   console.log('\nSign-up');
-  await check('first account becomes admin without an invite', async () => {
-    // a legacy account exists, so the first *new* sign-up needs an invite; use the legacy admin instead
+  await check('the oldest account becomes the admin', async () => {
+    // a legacy account exists from before admins existed: it becomes the admin
     const r = await post('/api/login', { username: 'legacy', password: 'old-password-1' });
     assert.equal(r.status, 200, r.text);
     admin = r.cookie;
     const st = await req('GET', '/api/state', { cookie: admin });
     assert.equal(st.json.user.isAdmin, true);
-    inviteKey = st.json.user.inviteKey;
-    assert.match(inviteKey, /^[a-z2-9]{4}(-[a-z2-9]{4}){3}$/);
+    assert.equal((await req('GET', '/api/config')).json.firstUser, false);
   });
   await check('old password hashes are upgraded on login', async () => {
     const { DatabaseSync } = require('node:sqlite');
@@ -147,31 +146,37 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal(row.salt, '');
     assert.equal((await post('/api/login', { username: 'legacy', password: 'old-password-1' })).status, 200);
   });
-  await check('sign-up without the invite key is refused', async () => {
-    for (const invite of [undefined, '', 'aaaa-bbbb-cccc-dddd', inviteKey.slice(0, -1)]) {
-      const r = await post('/api/register', { username: 'mallory', password: STRONG, invite });
-      assert.equal(r.status, 403, `invite ${invite} gave ${r.status}`);
+  await check('invite keys are gone: no key in state, no route to make one', async () => {
+    const st = await req('GET', '/api/state', { cookie: admin });
+    assert.equal(st.json.user.inviteKey, undefined);
+    assert.equal((await post('/api/admin/invite', {}, { cookie: admin })).status, 404);
+  });
+  await check('taken usernames are refused, whatever the case', async () => {
+    for (const username of ['legacy', 'LEGACY']) {
+      const r = await post('/api/register', { username, password: STRONG });
+      assert.equal(r.status, 409, `${username} gave ${r.status}`);
     }
   });
-  await check('without an invite, taken usernames are not revealed', async () => {
-    const r = await post('/api/register', { username: 'legacy', password: STRONG, invite: 'wrong' });
-    assert.equal(r.status, 403);
-    assert.doesNotMatch(r.text, /taken/);
+  await check('odd usernames are refused', async () => {
+    for (const username of ['ab', 'x'.repeat(33), 'bad name', '<script>', 'émile', '../admin', '']) {
+      assert.equal((await post('/api/register', { username, password: STRONG })).status, 400, `“${username}” was accepted`);
+    }
   });
   await check('weak passwords are refused', async () => {
     for (const pw of ['short', 'password123', 'aaaaaaaaaaaa', 'abababababab', 'bob-the-builder-xyz', 'Password123']) {
-      const r = await post('/api/register', { username: 'bob-the-builder', password: pw, invite: inviteKey });
+      const r = await post('/api/register', { username: 'bob-the-builder', password: pw });
       assert.equal(r.status, 400, `"${pw}" was accepted`);
     }
   });
   let bob;
-  await check('sign-up with invite and a strong password works', async () => {
-    const r = await post('/api/register', { username: 'bob', password: STRONG, invite: inviteKey.toUpperCase().replace(/-/g, ' ') });
+  await check('anyone can sign up with a strong password, as a normal user', async () => {
+    // an old client might still send an invite field: it's ignored
+    const r = await post('/api/register', { username: 'bob', password: STRONG, invite: 'old-key' });
     assert.equal(r.status, 200, r.text);
     bob = r.cookie;
     const st = await req('GET', '/api/state', { cookie: bob });
     assert.equal(st.json.user.isAdmin, false);
-    assert.equal(st.json.user.inviteKey, undefined, 'non-admin can see invite key');
+    assert.equal(st.json.user.userCount, undefined, 'non-admin can see the account count');
   });
   await check('new hashes use OWASP scrypt settings and unique salts', async () => {
     const { DatabaseSync } = require('node:sqlite');
@@ -227,14 +232,14 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
 
   console.log('\nAttacks found in the pen test (regression checks)');
   await check('parallel guesses can’t get past the lock', async () => {
-    await post('/api/register', { username: 'pat', password: STRONG, invite: inviteKey });
+    await post('/api/register', { username: 'pat', password: STRONG });
     const tries = await Promise.all(Array.from({ length: 25 }, (_, i) =>
       post('/api/login', { username: 'pat', password: `parallel-${i}-guess` }, { headers: { 'cf-connecting-ip': `198.18.${i}.1` } })));
     const checked = tries.filter((t) => t.status === 401).length;
     assert.ok(checked <= 5, `${checked} parallel guesses were checked`);
   });
   await check('strangers guessing wrong can’t lock the owner out of their own device', async () => {
-    const reg = await post('/api/register', { username: 'dana', password: STRONG, invite: inviteKey });
+    const reg = await post('/api/register', { username: 'dana', password: STRONG });
     const myDevice = reg.device;
     assert.ok(myDevice, 'no known-device cookie was set');
     for (let i = 0; i < 6; i++) await post('/api/login', { username: 'dana', password: `attacker-${i}-guess` }, { headers: { 'cf-connecting-ip': `198.19.${i}.1` } });
@@ -243,7 +248,7 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal(mine.status, 200, `owner on known device got ${mine.status}`);
   });
   await check('a known-device cookie only works for its own account', async () => {
-    const other = (await post('/api/register', { username: 'eve', password: STRONG2, invite: inviteKey })).device;
+    const other = (await post('/api/register', { username: 'eve', password: STRONG2 })).device;
     for (let i = 0; i < 6; i++) await post('/api/login', { username: 'dana', password: `x-${i}-guess-x` }, { headers: { 'cf-connecting-ip': `198.20.${i}.1` } });
     assert.equal((await post('/api/login', { username: 'dana', password: STRONG }, { cookie: other })).status, 429);
   });
@@ -294,7 +299,6 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal((await post('/api/timer/start', { itemId: adminItemId }, { cookie: bob })).status, 404);
   });
   await check('non-admins cannot use admin features', async () => {
-    assert.equal((await post('/api/admin/invite', {}, { cookie: bob })).status, 403);
     assert.equal((await req('GET', '/api/admin/users', { cookie: bob })).status, 403);
     assert.equal((await post('/api/admin/users/1/reset', {}, { cookie: bob })).status, 403);
     assert.equal((await post('/api/admin/users/1/delete', {}, { cookie: bob })).status, 403);
@@ -342,7 +346,7 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   });
   let carol;
   await check('changing password needs the current one and signs out other devices', async () => {
-    carol = (await post('/api/register', { username: 'carol', password: STRONG, invite: inviteKey })).cookie;
+    carol = (await post('/api/register', { username: 'carol', password: STRONG })).cookie;
     const other = (await post('/api/login', { username: 'carol', password: STRONG })).cookie;
     assert.equal((await post('/api/password', { current: 'wrong-wrong', next: STRONG2 }, { cookie: carol })).status, 401);
     const r = await post('/api/password', { current: STRONG, next: STRONG2 }, { cookie: carol });
@@ -367,19 +371,13 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   await check('the admin account cannot be deleted', async () => {
     assert.equal((await post('/api/account/delete', { password: 'old-password-1' }, { cookie: admin })).status, 400);
   });
-  await check('regenerating the invite key kills the old one, keeps accounts', async () => {
-    await post('/api/admin/invite', {}, { cookie: admin });
-    assert.equal((await post('/api/register', { username: 'dave', password: STRONG, invite: inviteKey })).status, 403);
-    assert.equal((await req('GET', '/api/state', { cookie: bob })).status, 200);
-  });
 
   console.log('\nFriends & points');
   let f1, f2, f3;
   await check('friends: requests, acceptance and privacy', async () => {
-    f1 = (await post('/api/register', { username: 'fiona', password: STRONG, invite: (await req('GET', '/api/state', { cookie: admin })).json.user.inviteKey })).cookie;
-    const inv = (await req('GET', '/api/state', { cookie: admin })).json.user.inviteKey;
-    f2 = (await post('/api/register', { username: 'gus', password: STRONG, invite: inv })).cookie;
-    f3 = (await post('/api/register', { username: 'hana', password: STRONG, invite: inv })).cookie;
+    f1 = (await post('/api/register', { username: 'fiona', password: STRONG })).cookie;
+    f2 = (await post('/api/register', { username: 'gus', password: STRONG })).cookie;
+    f3 = (await post('/api/register', { username: 'hana', password: STRONG })).cookie;
     assert.equal((await post('/api/friends/request', { username: 'fiona' }, { cookie: f1 })).status, 400, 'friended yourself');
     assert.equal((await post('/api/friends/request', { username: 'nobody-at-all' }, { cookie: f1 })).status, 404);
     assert.equal((await post('/api/friends/accept', { username: 'gus' }, { cookie: f1 })).status, 404, 'accepted a request that was never sent');
@@ -505,6 +503,12 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.ok(r.json.versions.some((v) => v.version === '1.0.0' && v.groups.length));
     assert.equal(r.json.release, require('../package.json').version);
   });
+  await check('what’s new comes in Dutch too, with the same versions', async () => {
+    const en = (await req('GET', '/api/changelog?lang=en')).json, nl = (await req('GET', '/api/changelog?lang=nl')).json;
+    assert.deepEqual(nl.versions.map((v) => v.version), en.versions.map((v) => v.version));
+    assert.ok(nl.versions.find((v) => v.version === '1.0.0').intro.includes('officiële'));
+    assert.deepEqual((await req('GET', '/api/changelog?lang=<script>')).json.versions, en.versions);
+  });
 
   console.log('\nStorage');
   await check('database files are private to the app user', async () => {
@@ -518,6 +522,31 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal((await req('GET', '/healthz')).status, 200);
   });
 
+  await stop();
+  fs.rmSync(DATA, { recursive: true, force: true });
+
+  // A fresh, empty site with a low daily cap on new accounts.
+  console.log('\nPublic sign-up (fresh site, at most 2 new accounts a day)');
+  DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'bored-test-'));
+  await start({ MAX_SIGNUPS_PER_DAY: '2' });
+  await check('on an empty site the first sign-up becomes the admin', async () => {
+    assert.equal((await req('GET', '/api/config')).json.firstUser, true);
+    const r = await post('/api/register', { username: 'founder', password: STRONG });
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await req('GET', '/api/state', { cookie: r.cookie })).json.user.isAdmin, true);
+    assert.equal((await req('GET', '/api/config')).json.firstUser, false);
+  });
+  await check('everyone after that is a normal user', async () => {
+    const r = await post('/api/register', { username: 'second', password: STRONG });
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await req('GET', '/api/state', { cookie: r.cookie })).json.user.isAdmin, false);
+  });
+  await check('the daily cap pauses new sign-ups, but sign-in keeps working', async () => {
+    const r = await post('/api/register', { username: 'third', password: STRONG });
+    assert.equal(r.status, 503, r.text);
+    assert.match(r.json.error, /paused/);
+    assert.equal((await post('/api/login', { username: 'second', password: STRONG })).status, 200);
+  });
   await stop();
   fs.rmSync(DATA, { recursive: true, force: true });
   console.log(`\n${passed} passed${skipped ? `, ${skipped} skipped` : ''}${process.exitCode ? ', SOME FAILED' : ''}`);

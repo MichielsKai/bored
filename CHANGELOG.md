@@ -1,6 +1,6 @@
 # Changelog
 
-This list also appears in the app (Settings → What's new), so it's written for the people using bored?.
+This list also appears in the app (Settings → What's new), so it's written for the people using bored?. The Dutch version is CHANGELOG.nl.md: keep both in step.
 Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
 ## Unreleased
@@ -16,8 +16,11 @@ Version numbers are **major.minor.patch**. Kai decides whether a release is mino
 - **High-fives.** See your friends' big moments (streaks, finished projects, achievements) and give them a high-five. You'll get a notice when someone high-fives yours.
 - **Weekly recap.** When a new week starts you get last week's highlights: hours, points, your best day, what you spent the most time on, and where you finished among your friends. It's also in Stats any time.
 - **50 achievements**, from your first spin to a year-long streak, each worth bonus points. Five of them are legendary and absurdly hard. Good luck.
+- **Nederlands.** bored? now speaks Dutch too. It follows your device's language, and you can switch in Settings or on the sign-in screen.
+- **A privacy notice** in Settings and on the sign-in screen that explains, in plain words, what's stored and who sees it.
 
 ### Changed
+- **Anyone can sign up.** You no longer need an invite key to create an account.
 - The line above a spin result no longer assumes it's evening.
 - Sessions from before this version count for points too (without bonuses).
 - Up to 8 hours a day earn points, and time added more than 2 days later doesn't, to keep the leaderboard fair.
