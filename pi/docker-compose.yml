@@ -1,0 +1,13 @@
+# bored? on the Raspberry Pi. Managed by setup.sh and update.sh; settings live in .env
+services:
+  bored:
+    image: ${BORED_IMAGE}
+    container_name: bored
+    restart: unless-stopped
+    ports:
+      - "${BORED_PORT:-3000}:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=${TZ:-Europe/Brussels}
+      - DEFAULT_HOURS_PER_UNLOCK=${DEFAULT_HOURS_PER_UNLOCK:-20}

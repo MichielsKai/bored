@@ -1,0 +1,13 @@
+# Build and run from source (for testing changes locally).
+# On the Pi, use the setup in pi/ instead: it installs prebuilt images and updates itself.
+services:
+  bored:
+    build: .
+    container_name: bored
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=Europe/Brussels

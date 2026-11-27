@@ -1,0 +1,12 @@
+{
+  "name": "bored",
+  "version": "1.0.0",
+  "description": "Spin the wheel, do the stuff you already own, earn your next purchase.",
+  "main": "server.js",
+  "private": true,
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning server.js"
+  },
+  "license": "MIT"
+}

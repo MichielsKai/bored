@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6265EC"/><stop offset="1" stop-color="#4A4DD6"/></linearGradient>
+  <filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="18.4" stdDeviation="26.6" flood-color="#1B1C6E" flood-opacity="0.35"/></filter>
+  <filter id="sh2" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="6.1" stdDeviation="8.2" flood-color="#000" flood-opacity="0.25"/></filter>
+</defs>
+<rect width="1024" height="1024" rx="225" fill="url(#bg)"/>
+<g transform="translate(512 548) scale(1.075) translate(-512 -548)">
+<circle cx="512.0" cy="547.84" r="337.92" fill="#FFFFFF" filter="url(#sh)"/>
+<path d="M512.0,547.84 L359.94,284.46 A304.12800000000004,304.12800000000004 0 0 1 664.06,284.46 Z" fill="#FFB4A2"/>
+<path d="M512.0,547.84 L664.06,284.46 A304.12800000000004,304.12800000000004 0 0 1 816.13,547.84 Z" fill="#A6C8FF"/>
+<path d="M512.0,547.84 L816.13,547.84 A304.12800000000004,304.12800000000004 0 0 1 664.06,811.22 Z" fill="#FFD873"/>
+<path d="M512.0,547.84 L664.06,811.22 A304.12800000000004,304.12800000000004 0 0 1 359.94,811.22 Z" fill="#A3DFB8"/>
+<path d="M512.0,547.84 L359.94,811.22 A304.12800000000004,304.12800000000004 0 0 1 207.87,547.84 Z" fill="#CDBBFF"/>
+<path d="M512.0,547.84 L207.87,547.84 A304.12800000000004,304.12800000000004 0 0 1 359.94,284.46 Z" fill="#FFB8D2"/>
+<line x1="512.0" y1="547.84" x2="359.94" y2="284.46" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<line x1="512.0" y1="547.84" x2="664.06" y2="284.46" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<line x1="512.0" y1="547.84" x2="816.13" y2="547.84" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<line x1="512.0" y1="547.84" x2="664.06" y2="811.22" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<line x1="512.0" y1="547.84" x2="359.94" y2="811.22" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<line x1="512.0" y1="547.84" x2="207.87" y2="547.84" stroke="#fff" stroke-width="10.6" stroke-linecap="round"/>
+<circle cx="512.0" cy="547.84" r="81.1008" fill="#FFFFFF" filter="url(#sh2)"/>
+<g filter="url(#sh2)"><g transform="translate(451.2 124.1) scale(4.055)"><path d="M15 32c-1 0-1.7-.6-2.2-1.4L4.2 12.8A11.5 11.5 0 1 1 25.8 12.8l-8.6 17.8c-.5.8-1.2 1.4-2.2 1.4Z" fill="#1D1E22"/><circle cx="15" cy="10.5" r="4" fill="#FFFFFF"/></g></g>
+</g>
+</svg>
