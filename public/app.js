@@ -10,7 +10,7 @@ const SLICE_TEXT = '#1D1E22';
 const CONFETTI = [...INKS, '#5457E0'];
 const KINDS = { hobby: 'Hobby', game: 'Game', project: 'Project', learning: 'Learning', other: 'Other' };
 const KICKERS = [
-  'The wheel has spoken.', 'Tonight you’re doing:', 'Skip the shop. Do this:', 'You already own the fun:',
+  'The wheel has spoken.', 'Up next for you:', 'Skip the shop. Do this:', 'You already own the fun:',
   'Dust this one off:', 'Your past self bought this for a reason:', 'Here’s your plan:',
 ];
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -414,7 +414,7 @@ function settingsSheet() {
         ${u.isAdmin ? '' : '<button class="btn small danger" data-act="account-del">Delete account</button>'}
       </div>
     </div>
-    <p class="hint" style="text-align:center">bored? version ${esc(config.version || 'dev')}${config.buildDate ? `, built ${esc(new Date(config.buildDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}</p>`);
+    <p class="hint" style="text-align:center">bored? ${esc(config.release || '')} (${esc(config.version || 'dev')})${config.buildDate ? `, built ${esc(new Date(config.buildDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}</p>`);
   loadDevices();
   if (u.isAdmin) loadPeople();
 }

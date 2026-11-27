@@ -4,7 +4,9 @@
   "description": "Spin the wheel, do the stuff you already own, earn your next purchase.",
   "main": "server.js",
   "private": true,
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning --disallow-code-generation-from-strings server.js",
     "test": "bash test/security.sh"

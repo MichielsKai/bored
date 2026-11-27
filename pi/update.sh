@@ -53,5 +53,5 @@ fi
 
 docker compose up -d --remove-orphans
 docker image prune -f > /dev/null
-version=$(docker exec bored sh -c 'echo $APP_VERSION' 2>/dev/null || echo unknown)
+version=$(docker exec bored sh -c 'node -p "require(\"./package.json\").version" 2>/dev/null; echo "($APP_VERSION)"' 2>/dev/null | tr '\n' ' ' || echo unknown)
 log "Now running version $version"

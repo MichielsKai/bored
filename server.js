@@ -15,7 +15,8 @@ const DEFAULT_HOURS = Number(process.env.DEFAULT_HOURS_PER_UNLOCK || 20);
 const COOKIE_SECURE = process.env.COOKIE_SECURE;             // 'true' | 'false' | unset (auto)
 const TRUST_PROXY = process.env.TRUST_PROXY || 'auto';       // 'auto' | 'always' | 'never'
 const PWNED_CHECK = process.env.PWNED_CHECK !== 'false';     // breached-password check
-const APP_VERSION = process.env.APP_VERSION || 'dev';
+const APP_VERSION = process.env.APP_VERSION || 'dev';                 // git commit of this build
+const APP_RELEASE = require('./package.json').version;              // release number, e.g. 1.1.0
 const BUILD_DATE = process.env.BUILD_DATE || '';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const KINDS = ['hobby', 'game', 'project', 'learning', 'other'];
@@ -538,7 +539,7 @@ const route = (method, pattern, auth, handler) => {
 };
 const requireAdmin = (user) => { if (!user.is_admin) throw new HttpError(403, 'Only the admin can do that'); };
 
-route('GET', '/api/config', false, () => ({ needsInvite: userCount() > 0, defaultHours: DEFAULT_HOURS, version: APP_VERSION, buildDate: BUILD_DATE, passwordMin: PASSWORD_MIN }));
+route('GET', '/api/config', false, () => ({ needsInvite: userCount() > 0, defaultHours: DEFAULT_HOURS, release: APP_RELEASE, version: APP_VERSION, buildDate: BUILD_DATE, passwordMin: PASSWORD_MIN }));
 
 // --- auth
 route('POST', '/api/register', false, async (req, res, body) => {
@@ -965,7 +966,7 @@ setInterval(cleanup, 3600_000).unref();
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 process.on('uncaughtException', (e) => { console.error('uncaughtException', e); process.exit(1); });
 
-server.listen(PORT, () => console.log(`bored? ${APP_VERSION} listening on :${PORT} (data in ${DATA_DIR}, trust proxy: ${TRUST_PROXY})`));
+server.listen(PORT, () => console.log(`bored? ${APP_RELEASE} (${APP_VERSION}) listening on :${PORT} (data in ${DATA_DIR}, trust proxy: ${TRUST_PROXY})`));
 const shutdown = () => { server.close(); db.close(); process.exit(0); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
