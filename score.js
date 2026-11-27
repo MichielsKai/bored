@@ -186,7 +186,7 @@ function scoring(db) {
     };
   }
 
-  return { scoreSession, milestone, finishBonus, pointsSince, summary, currentStreak, startOfWeek, startOfMonth };
+  return { scoreSession, milestone, finishBonus, pointsSince, summary, currentStreak, best, startOfWeek, startOfMonth };
 }
 
-module.exports = { scoring, POINTS_PER_MIN, MILESTONES, DAILY_CAP_MIN, STREAK_DAY_MIN };
+module.exports = { scoring, startOfWeek, dayKey, POINTS_PER_MIN, MILESTONES, DAILY_CAP_MIN, STREAK_DAY_MIN };

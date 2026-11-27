@@ -13,7 +13,7 @@ ENV NODE_ENV=production \
 RUN apk upgrade --no-cache
 
 WORKDIR /app
-COPY package.json server.js score.js CHANGELOG.md ./
+COPY package.json server.js score.js achievements.js CHANGELOG.md ./
 COPY public ./public
 # Pi setup files, so the Pi can pull them straight out of the image
 COPY pi ./pi

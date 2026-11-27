@@ -41,6 +41,18 @@ async function api(method, url, body) {
   if (res.status === 401 && data.error === 'Sign in to continue') { S = null; renderAuth(); throw new Error(data.error); }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   if (data && Array.isArray(data.items)) setState(data);
+  if (data && Array.isArray(data.achievements) && data.achievements.length && url !== '/api/achievements') {
+    const list = data.achievements; enqueue(() => showAchievements(list));
+  }
+  if (data && Array.isArray(data.highFives) && data.highFives.length) {
+    const hf = data.highFives;
+    setTimeout(() => {
+      const names = [...new Set(hf.map((h) => h.from))];
+      toast(hf.length === 1 ? `${hf[0].from} high-fived ${hf[0].text}` : `${names[0]}${names.length > 1 ? ` and ${names.length - 1} other${names.length > 2 ? 's' : ''}` : ''} high-fived you ${hf.length} times`);
+      SFX.pop(); FX.burstFrom($('.nav [data-v="friends"]'), { n: 14 });
+    }, 700);
+    api('POST', '/api/high-fives/seen').catch(() => {});
+  }
   return data;
 }
 const now = () => Date.now() + clockOffset;
@@ -72,6 +84,13 @@ const money = (p) => p == null ? '' : new Intl.NumberFormat(undefined, { style: 
 const colorOf = (item) => INKS[(item.id - 1) % INKS.length];
 const active = () => S.items.filter((i) => !i.archived);
 
+// Quick filters for the wheel: tags (AND) and kinds (any of).
+let filters = store.get('filters', { quick: false, chill: false, kinds: [] });
+const filtering = () => filters.quick || filters.chill || filters.kinds.length > 0;
+function wheelItems() {
+  return active().filter((i) => (!filters.quick || i.quick) && (!filters.chill || i.chill) && (!filters.kinds.length || filters.kinds.includes(i.kind)));
+}
+
 // Neglected things get bigger slices: 1× if touched today, up to 3× after four weeks or never.
 function weightOf(item) {
   if (!item.last_at) return 3;
@@ -96,6 +115,13 @@ const ICON = {
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   friends: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 6H5.5a1.5 1.5 0 0 0 0 3H8M16 6h2.5a1.5 1.5 0 0 1 0 3H16"/><path d="M12 13v3M8.5 20h7M10 16h4l.5 4h-5l.5-4Z"/></svg>',
   flame: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.6 2.3c.4 2.6-.6 4.4-2 6-1.3 1.5-2.6 3-2.6 5.4 0 .9.2 1.7.6 2.4-.9-.6-1.6-1.6-1.9-2.8-1 1.3-1.7 3-1.7 4.7C5 21.1 8.1 24 12 24s7-2.9 7-6.6c0-4.6-3.2-6.8-4.4-10-.5-1.5-.5-3.4-2-5.1Z" transform="scale(.92) translate(1 0)"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  leaf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14Z"/><path d="M5 19 13 11"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
+  hand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11M11 10.5v-6a1.5 1.5 0 0 1 3 0V11M14 10.5V6a1.5 1.5 0 0 1 3 0v8.5a6.5 6.5 0 0 1-6.5 6.5h-.3a6 6 0 0 1-4.6-2.2L3.2 15a1.6 1.6 0 0 1 2.4-2.1L8 15"/></svg>',
+  coin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2A3 3 0 0 0 12 8c-1.7 0-2.8.9-2.8 2s1.1 1.6 2.8 2 2.8.9 2.8 2-1.1 2-2.8 2a3 3 0 0 1-2.5-1.2M12 6.5V8M12 16v1.5"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 2.8 2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9L12 2.8Z"/></svg>',
+  crown: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7.5 7.5 11 12 4l4.5 7L21 7.5 19 18H5L3 7.5Z"/><rect x="5" y="19.5" width="14" height="2" rx="1"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z"/></svg>',
   pointer: '<svg viewBox="0 0 30 34"><path d="M15 32c-1 0-1.7-.6-2.2-1.4L4.2 12.8A11.5 11.5 0 1 1 25.8 12.8l-8.6 17.8c-.5.8-1.2 1.4-2.2 1.4Z" fill="currentColor"/></svg>',
 };
@@ -124,6 +150,7 @@ function render() {
     </div>`;
   if (view === 'spin') drawWheel();
   if (view === 'friends') { if (F) afterFriendsRender(); loadFriends(); }
+  if (view === 'stats') loadAchievements();
   tickTimer();
   // animate progress from where it was, and bump the pill when a buy unlocks
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -167,9 +194,30 @@ function meter(b) {
 }
 
 // --- Spin
+function filterChips() {
+  const kinds = [...new Set(active().map((i) => i.kind))];
+  const chip = (act, v, label, on) => `<button class="fchip" data-act="${act}" data-v="${v}" aria-pressed="${on}">${label}</button>`;
+  return `<div class="filters" role="group" aria-label="Filter the wheel">
+    ${chip('filter', 'quick', `${ICON.clock}Under 30 min`, filters.quick)}
+    ${chip('filter', 'chill', `${ICON.leaf}Low energy`, filters.chill)}
+    ${kinds.length > 1 ? kinds.map((k) => chip('filter-kind', k, KINDS[k], filters.kinds.includes(k))).join('') : ''}
+    ${filtering() ? `<button class="fchip clear" data-act="filter-clear">Clear</button>` : ''}
+  </div>`;
+}
 function viewSpin() {
-  const list = active();
+  const all = active();
+  const list = wheelItems();
   const b = S.bank;
+  if (all.length >= 2 && list.length < 2) {
+    const untagged = (filters.quick && !all.some((i) => i.quick)) || (filters.chill && !all.some((i) => i.chill));
+    return `<section class="wheel-area">${filterChips()}
+      <div class="empty surface">
+        <h2>${list.length ? 'Only one match' : 'Nothing matches'}</h2>
+        <p class="muted">${untagged ? 'Tag things as “under 30 min” or “low energy” in My stuff, then they’ll show up here.' : 'Loosen a filter to get at least two things on the wheel.'}</p>
+        ${list.length === 1 ? `<button class="btn primary" data-act="timer-start" data-id="${list[0].id}">Just do ${esc(list[0].name)}</button>` : ''}
+        <button class="btn" data-act="filter-clear">Clear filters</button>
+      </div></section>`;
+  }
   if (list.length < 2) {
     return `<section class="empty surface">
       <h2>${list.length ? 'One more' : 'Nothing to spin yet'}</h2>
@@ -179,6 +227,7 @@ function viewSpin() {
   }
   const toGo = b.costMinutes - b.progressMinutes;
   return `<section class="wheel-area">
+      ${all.length > 2 ? filterChips() : ''}
       <div class="wheel-wrap">
         <span class="pointer" id="pointer" aria-hidden="true">${ICON.pointer}</span>
         <canvas id="wheel" role="img" aria-label="Wheel with ${list.length} things: ${esc(list.map((i) => i.name).join(', '))}"></canvas>
@@ -221,7 +270,7 @@ function kindPicker(name, current) {
 function itemRow(i) {
   const meta = i.archived
     ? `${KINDS[i.kind]}, ${hrs(i.minutes)} logged`
-    : `${KINDS[i.kind]}, ${ago(i.last_at)}, ${odds(i)}% odds`;
+    : `${KINDS[i.kind]}${i.steps_total ? `, ${i.steps_done}/${i.steps_total} steps` : ''}, ${ago(i.last_at)}, ${odds(i)}% odds`;
   return `<li class="${i.id === freshId ? 'fresh' : ''}"><button class="item-row" data-act="item" data-id="${i.id}">
     <span class="dot" style="background:${i.archived ? 'var(--surface-2)' : colorOf(i)}"></span>
     <span class="main"><span class="name">${esc(i.name)}</span><span class="meta">${meta}</span></span>
@@ -353,6 +402,13 @@ function viewFriends() {
       : `<div class="empty surface"><h2>Better with friends</h2><p class="muted">Add someone by their username and see who spends the most time on what they already own.</p></div>`}
     </section>
 
+    ${F.feed && F.feed.length ? `<section class="section"><h2>Friends’ moments</h2><ul class="list">${F.feed.map((e) => `<li><div class="plain-row">
+        ${avatar(e.username)}
+        <div class="main"><div class="name">${e.you ? 'You' : esc(e.username)} <span class="feed-text">${esc(e.text)}</span></div><div class="muted small">${esc(seenAgo(e.at))}</div></div>
+        ${e.you ? (e.fives ? `<span class="fives">${ICON.hand}${e.fives}</span>` : '')
+          : `<button class="five ${e.fived ? 'on' : ''}" data-act="high-five" data-id="${e.id}" ${e.fived ? 'disabled' : ''} aria-label="High-five ${esc(e.username)}">${ICON.hand}${e.fives ? `<span>${e.fives}</span>` : ''}</button>`}
+      </div></li>`).join('')}</ul></section>` : ''}
+
     <section class="section">
       <h2>Add a friend</h2>
       <form class="row surface pad" data-form="add-friend">
@@ -381,6 +437,12 @@ function viewFriends() {
       </div>
     </details>`;
 }
+const seenAgo = (ts) => {
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 60) return m <= 1 ? 'just now' : `${m} minutes ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.floor(h / 24); return d === 1 ? 'yesterday' : `${d} days ago`;
+};
 function afterFriendsRender() {
   // count your score up from what you saw last time, and show rank changes
   const el = $('#hero-num'); if (!el) return;
@@ -416,6 +478,106 @@ function friendSheet(name) {
     <p><span class="mini-flame">${ICON.flame}</span> ${w.streak ? `${w.streak}-day streak` : 'No streak right now'}, ${hm(w.minutes)} this week.</p>
     <button class="btn danger" data-act="friend-remove" data-name="${esc(name)}">Remove friend</button>`);
 }
+
+// --- Achievements
+let A = null, achLoadedAt = 0;
+const CAT_ICON = { wheel: 'spin', time: 'clock', streak: 'flame', money: 'coin', social: 'hand', project: 'check', rediscover: 'spark', points: 'star', legendary: 'crown' };
+const TIER_NAME = { bronze: 'Bronze', silver: 'Silver', gold: 'Gold', legendary: 'Legendary' };
+const badge = (a, big = false) => `<span class="badge t-${a.tier} ${a.unlockedAt === null ? 'locked' : ''} ${big ? 'big' : ''}">${ICON[CAT_ICON[a.cat]] || ICON.star}</span>`;
+async function loadAchievements(force = false) {
+  if (!force && Date.now() - achLoadedAt < 5000) return;
+  achLoadedAt = Date.now();
+  try {
+    A = (await api('GET', '/api/achievements')).achievements;
+    const el = $('#ach'); if (el) el.innerHTML = achievementsBlock();
+  } catch { /* try again later */ }
+}
+function achievementsBlock() {
+  if (!A) return '<p class="hint">Loading achievements…</p>';
+  const got = A.filter((a) => a.unlockedAt).length;
+  const normal = A.filter((a) => a.tier !== 'legendary'), legend = A.filter((a) => a.tier === 'legendary');
+  const cell = (a) => `<button class="ach" data-act="badge" data-key="${a.key}">${badge(a)}<span class="ach-name">${esc(a.name)}</span>
+      ${a.unlockedAt ? '' : `<span class="ach-bar"><span style="width:${Math.round(a.progress * 100)}%"></span></span>`}</button>`;
+  return `<div class="section-head"><h2>Achievements</h2><span class="muted small">${got} of ${A.length}</span></div>
+    <div class="meter-track"><div class="meter-fill" style="width:${(got / A.length) * 100}%"></div></div>
+    <div class="ach-grid surface">${normal.sort((x, y) => (!!y.unlockedAt - !!x.unlockedAt)).map(cell).join('')}</div>
+    <div class="legend surface">
+      <div class="legend-head">${ICON.crown}<div><b>Legendary</b><span>Absurdly hard on purpose. 10,000 points each.</span></div></div>
+      <div class="ach-grid">${legend.map(cell).join('')}</div>
+    </div>`;
+}
+function badgeSheet(key) {
+  const a = A && A.find((x) => x.key === key); if (!a) return;
+  const fmt = (n) => (Number.isInteger(n) ? nf.format(n) : n.toFixed(1));
+  openSheet(`${sheetHead('')}
+    <div class="badge-detail">${badge(a, true)}
+      <span class="tier-label t-${a.tier}">${TIER_NAME[a.tier]}, ${nf.format(a.points)} points</span>
+      <h2>${esc(a.name)}</h2><p class="muted">${esc(a.desc)}</p>
+      ${a.unlockedAt ? `<p><b>Unlocked ${esc(day(a.unlockedAt))}</b></p>`
+        : `<div class="meter" style="max-width:280px"><div class="meter-track"><div class="meter-fill" style="width:${Math.round(a.progress * 100)}%"></div></div>
+           <span class="muted small" style="text-align:center">${a.key === 'the-monk' ? `${Math.round(a.progress * 100)}%` : `${fmt(a.current)} of ${fmt(a.goal)}`}</span></div>`}
+    </div>`);
+}
+function showAchievements(list) {
+  if (!list.length) return;
+  SFX.fanfare(); buzz([20, 60, 20, 60, 40]);
+  if (list.length === 1) {
+    const a = list[0];
+    openSheet(`${sheetHead('Achievement unlocked')}
+      <div class="badge-detail pop">${badge({ ...a, unlockedAt: 1 }, true)}
+        <span class="tier-label t-${a.tier}">${TIER_NAME[a.tier]}</span>
+        <h2>${esc(a.name)}</h2><p class="muted">${esc(a.desc)}</p>
+        <p class="ach-points">+${nf.format(a.points)} points</p></div>
+      <button class="btn primary block" data-act="close">Nice</button>`);
+  } else {
+    const total = list.reduce((x, a) => x + a.points, 0);
+    openSheet(`${sheetHead(`${list.length} achievements unlocked`)}
+      <ul class="list">${list.map((a) => `<li><div class="plain-row">${badge({ ...a, unlockedAt: 1 })}<div class="main"><div class="name">${esc(a.name)}</div><div class="muted small">${esc(a.desc)}</div></div><b>+${nf.format(a.points)}</b></div></li>`).join('')}</ul>
+      <p class="ach-points">+${nf.format(total)} points</p>
+      <button class="btn primary block" data-act="close">Nice</button>`);
+  }
+  FX.cannons(list.some((a) => a.tier === 'legendary') ? 260 : 120);
+  achLoadedAt = 0;
+}
+
+// --- Weekly recap
+async function recapSheet(auto = false) {
+  let r;
+  try { r = await api('GET', '/api/recap'); } catch (e) { if (!auto) toast(e.message); return; }
+  store.set(`recap.${r.start}`, true);
+  if (auto && !r.minutes) return;
+  const range = `${day(r.start)} to ${day(r.end - 1)}`;
+  const delta = r.prevMinutes ? Math.round(((r.minutes - r.prevMinutes) / r.prevMinutes) * 100) : null;
+  const topMax = r.top.length ? r.top[0].minutes : 1;
+  const weekday = (ts) => new Date(ts).toLocaleDateString(undefined, { weekday: 'long' });
+  openSheet(`${sheetHead('Your week')}
+    <p class="muted" style="margin-top:-10px">${esc(range)}</p>
+    ${r.minutes ? `
+    <div class="recap-hero">
+      <div><span class="recap-num">${round1(r.minutes / 60)}</span><span class="recap-unit">hours</span></div>
+      ${delta !== null ? `<span class="delta ${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs the week before</span>` : '<span class="delta up">Your first tracked week</span>'}
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="v">${nf.format(r.points)}</div><div class="k">points</div></div>
+      <div class="tile"><div class="v">${r.sessions}</div><div class="k">sessions</div></div>
+      <div class="tile"><div class="v">${r.daysActive}/7</div><div class="k">days active</div></div>
+    </div>
+    ${r.rank ? `<div class="recap-rank r${r.rank}">${ICON.friends}<span>You finished <b>#${r.rank}</b> of ${r.people} among your friends${r.rank === 1 ? '. Champion!' : ''}</span></div>` : ''}
+    ${r.bestDay ? `<p>Best day: <b>${esc(weekday(r.bestDay.day))}</b>, ${hm(r.bestDay.minutes)}.</p>` : ''}
+    <div class="hbars surface" style="box-shadow:none;background:var(--bg)">${r.top.map((t) => `<div class="hbar"><span class="lbl">${esc(t.name)}</span><span class="val">${hm(t.minutes)}</span>
+      <div class="track"><div class="fill" style="width:${(t.minutes / topMax) * 100}%"></div></div></div>`).join('')}</div>
+    ${r.achievements.length ? `<div><h3 style="margin-bottom:8px">Unlocked</h3><div class="chips">${r.achievements.map((a) => `<span class="chip t-${a.tier}">${esc(a.name)}</span>`).join('')}</div></div>` : ''}
+    ${r.highFives || r.buys ? `<p class="muted">${r.highFives ? `${r.highFives} high-five${r.highFives === 1 ? '' : 's'} from friends. ` : ''}${r.buys ? `You bought ${r.buys} thing${r.buys === 1 ? '' : 's'} you earned.` : ''}</p>` : ''}`
+    : `<div class="empty"><h2>A quiet week</h2><p class="muted">Nothing logged. This week is a fresh start: spin the wheel and pick something up.</p></div>`}
+    <button class="btn primary block" data-act="close">${r.minutes ? 'Onwards' : 'Let’s go'}</button>`);
+  if (r.minutes && r.rank === 1) FX.cannons(90);
+  SFX.land();
+}
+
+// --- popups that appear by themselves wait their turn
+const popupQueue = [];
+function enqueue(fn) { popupQueue.push(fn); setTimeout(runQueue, 500); }
+function runQueue() { if (!sheet.open && popupQueue.length) popupQueue.shift()(); }
 
 // --- Stats
 function weekStart(ts) {
@@ -455,6 +617,8 @@ function viewStats() {
       <div class="tile surface"><div class="v">${S.score.bestStreak}</div><div class="k">longest streak, days</div></div>
     </section>
 
+    <button class="version-btn" data-act="recap"><span class="main"><b>Last week’s recap</b><span class="muted small">Hours, points, best day and your rank</span></span><span class="chev">${ICON.chev}</span></button>
+    <section class="section" id="ach">${achievementsBlock()}</section>
     <section class="section">
       <h2>Hours per week</h2>
       <div class="surface chart">
@@ -633,7 +797,7 @@ function announceUpdate() {
   const seen = store.get('seenRelease', null);
   if (!config.release) return;
   if (!seen) { store.set('seenRelease', config.release); return; }
-  if (seen !== config.release && !sheet.open) setTimeout(() => { if (!sheet.open) whatsNewSheet(); }, 600);
+  if (seen !== config.release) enqueue(() => whatsNewSheet());
 }
 
 async function copyText(text) {
@@ -650,7 +814,7 @@ let wheelSlices = [];
 function drawWheel() {
   const canvas = $('#wheel');
   if (!canvas) return;
-  const list = active();
+  const list = wheelItems();
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const css = canvas.clientWidth;
   if (!css) return;
@@ -721,6 +885,7 @@ function spin() {
   $('#hub').disabled = true;
   wheelWinner = null; wheelDim = 0;
   SFX.warm(); SFX.whoosh(); buzz(8);
+  api('POST', '/api/spin').catch(() => {});
   // weighted pick
   const total = wheelSlices.reduce((a, s) => a + (s.end - s.start), 0);
   let r = Math.random() * total;
@@ -782,6 +947,8 @@ const SFX = (() => {
   try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch { /* unsupported */ }
   function ctx() {
     if (!store.get('sound', true)) return null;
+    // browsers only allow sound after you've tapped something; popups that open by themselves stay quiet
+    if (!ac && navigator.userActivation && !navigator.userActivation.hasBeenActive) return null;
     try {
       if (!ac) {
         ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -849,6 +1016,7 @@ function openSheet(html, onOpen) {
 }
 function closeSheet() { if (sheet.open) sheet.close(); }
 sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheet(); });
+sheet.addEventListener('close', () => setTimeout(runQueue, 350));
 sheet.addEventListener('close', () => { if (wheelWinner && !spinning && $('#wheel')) animateDim(0); else wheelWinner = null; });
 const sheetHead = (title) => `<div class="sheet-head"><h2>${title}</h2><button class="icon-btn" data-act="close" aria-label="Close">${ICON.x}</button></div>`;
 
@@ -861,6 +1029,7 @@ function showResult(item) {
       <span class="result-tag" style="background:${colorOf(item)}">${KINDS[item.kind]}</span>
       <div class="result-name">${esc(item.name)}</div>
       <p class="muted">${item.minutes ? hrs(item.minutes) + ' so far' : 'No time logged yet'}, ${ago(item.last_at)}.</p>
+      ${item.next_step ? `<p class="next-step">${ICON.check}<span><span class="muted small">Next step, ${item.steps_done} of ${item.steps_total} done</span><b>${esc(item.next_step)}</b></span></p>` : ''}
     </div>
     <div class="sheet-actions">
       <button class="btn primary" data-act="timer-start" data-id="${item.id}" data-spin="1">${running ? 'Stop current timer and start this' : 'Start timer'}</button>
@@ -901,9 +1070,14 @@ function itemSheet(id) {
     ${i.archived ? '' : `<div class="sheet-actions">
       <button class="btn primary" data-act="timer-start" data-id="${i.id}">${S.timer ? 'Switch timer to this' : 'Start timer'}</button>
       <button class="btn" data-act="log" data-id="${i.id}">Log time</button></div>`}
+    ${i.kind === 'project' && !i.archived ? `<section class="steps" id="steps" data-item="${i.id}"><p class="hint">Loading steps…</p></section>` : ''}
     <form class="stack" data-form="edit-item" data-id="${i.id}">
       <div class="field"><label for="ename">Name</label><input class="input" id="ename" name="name" value="${esc(i.name)}" maxlength="60" required></div>
       ${kindPicker('ekind', i.kind)}
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" name="quick" ${i.quick ? 'checked' : ''}><span class="track"></span><span>Works in 30 minutes or less</span></label>
+        <label class="toggle"><input type="checkbox" name="chill" ${i.chill ? 'checked' : ''}><span class="track"></span><span>Good for low energy</span></label>
+      </div>
       <p class="form-error"></p>
       <button class="btn">Save changes</button>
     </form>
@@ -914,6 +1088,30 @@ function itemSheet(id) {
       <button class="btn danger" data-act="item-del" data-id="${i.id}">Delete</button>
     </div>
     <p class="muted small">Finished and retired things leave the wheel but keep their hours. Deleting also removes the hours.</p>`);
+  if (i.kind === 'project' && !i.archived) loadSteps(i.id);
+}
+
+// --- project checklists
+async function loadSteps(itemId) {
+  try { const r = await api('GET', `/api/items/${itemId}/steps`); renderSteps(itemId, r.steps); } catch (e) { toast(e.message); }
+}
+function renderSteps(itemId, steps) {
+  const el = $('#steps', sheet); if (!el) return;
+  const done = steps.filter((x) => x.done).length;
+  const pct = steps.length ? Math.round((done / steps.length) * 100) : 0;
+  el.innerHTML = `
+    <div class="steps-head"><h3>Steps</h3>${steps.length ? `<span class="muted small">${done} of ${steps.length} done</span>` : ''}</div>
+    ${steps.length ? `<div class="meter-track"><div class="meter-fill" style="width:${pct}%"></div></div>` : ''}
+    ${steps.length ? `<ul class="step-list">${steps.map((x) => `<li class="${x.done ? 'done' : ''}">
+        <button class="check" data-act="step-toggle" data-id="${x.id}" data-done="${x.done ? 0 : 1}" aria-pressed="${x.done}" aria-label="${x.done ? 'Mark not done' : 'Mark done'}: ${esc(x.text)}">${x.done ? ICON.check : ''}</button>
+        <span class="step-text">${esc(x.text)}</span>
+        <button class="icon-btn" data-act="step-del" data-id="${x.id}" aria-label="Delete step ${esc(x.text)}">${ICON.x}</button>
+      </li>`).join('')}</ul>` : '<p class="hint">Break the project into small steps. The next one shows up when the wheel picks it.</p>'}
+    ${steps.length && done === steps.length ? `<div class="all-done"><b>Every step is done.</b> <button class="btn small primary" data-act="archive" data-id="${itemId}" data-v="1">Mark the project finished</button></div>` : ''}
+    <form class="row" data-form="add-step" data-item="${itemId}">
+      <input class="input grow" name="text" placeholder="Add a step" maxlength="120" required aria-label="New step">
+      <button class="btn">Add</button>
+    </form>`;
 }
 
 function confirmSheet(title, text, label, onYes, danger = true) {
@@ -1172,6 +1370,38 @@ document.addEventListener('click', async (e) => {
         selectedWeek = Number(el.dataset.i); SFX.click(); render(); break;
       }
       case 'settings': settingsSheet(); break;
+      case 'filter': filters[el.dataset.v] = !filters[el.dataset.v]; store.set('filters', filters); SFX.click(); render(); break;
+      case 'filter-kind': {
+        const k = el.dataset.v;
+        filters.kinds = filters.kinds.includes(k) ? filters.kinds.filter((x) => x !== k) : [...filters.kinds, k];
+        store.set('filters', filters); SFX.click(); render(); break;
+      }
+      case 'filter-clear': filters = { quick: false, chill: false, kinds: [] }; store.set('filters', filters); SFX.click(); render(); break;
+      case 'step-toggle': {
+        const done = el.dataset.done === '1';
+        const r = await api('PATCH', `/api/steps/${id}`, { done });
+        const itemId = Number($('#steps', sheet)?.dataset.item);
+        renderSteps(itemId, r.steps);
+        if (done) {
+          SFX.coin(); buzz(10);
+          const li = $(`[data-act="step-toggle"][data-id="${id}"]`, sheet);
+          FX.burstFrom(li, { n: 14, speed: 5 });
+          if (r.steps.every((x) => x.done)) { SFX.fanfare(); FX.cannons(70); }
+        } else SFX.click();
+        break;
+      }
+      case 'step-del': {
+        const r = await api('DELETE', `/api/steps/${id}`);
+        renderSteps(Number($('#steps', sheet)?.dataset.item), r.steps); SFX.thud(); break;
+      }
+      case 'high-five': {
+        F = await api('POST', '/api/high-five', { eventId: id });
+        SFX.chaching(); buzz([10, 40, 10]); FX.burstFrom(el, { n: 22, speed: 7 });
+        setTimeout(() => { if (view === 'friends') { $('#view').innerHTML = viewFriends(); } }, 250);
+        break;
+      }
+      case 'badge': badgeSheet(el.dataset.key); break;
+      case 'recap': recapSheet(); break;
       case 'whats-new': whatsNewSheet(); break;
       case 'board': boardPeriod = el.dataset.v; store.set('board', boardPeriod); SFX.click(); $('#view').innerHTML = viewFriends(); afterFriendsRender(); break;
       case 'friend': friendSheet(el.dataset.name); break;
@@ -1286,7 +1516,8 @@ document.addEventListener('submit', async (e) => {
         break;
       }
       case 'edit-item':
-        await api('PATCH', `/api/items/${f.dataset.id}`, { name: formVal(f, 'name'), kind: f.querySelector('input[name="ekind"]:checked')?.value });
+        await api('PATCH', `/api/items/${f.dataset.id}`, { name: formVal(f, 'name'), kind: f.querySelector('input[name="ekind"]:checked')?.value,
+          quick: f.elements.quick.checked, chill: f.elements.chill.checked });
         closeSheet(); toast('Saved');
         break;
       case 'log': {
@@ -1310,6 +1541,12 @@ document.addEventListener('submit', async (e) => {
         F = r; S.friendRequests = r.incoming.length;
         if (r.accepted) { SFX.rankUp(); toast(`You and ${r.accepted} are now friends`); render(); }
         else { SFX.pop(); toast(`Request sent to ${r.sent}`); $('#view').innerHTML = viewFriends(); afterFriendsRender(); }
+        break;
+      }
+      case 'add-step': {
+        const r = await api('POST', `/api/items/${f.dataset.item}/steps`, { text: formVal(f, 'text') });
+        renderSteps(Number(f.dataset.item), r.steps); SFX.pop();
+        $('#steps input[name="text"]', sheet)?.focus();
         break;
       }
       case 'add-wish':
@@ -1363,5 +1600,9 @@ document.fonts?.ready.then(() => { if (S && view === 'spin') drawWheel(); });
 (async () => {
   try { config = await (await fetch('/api/config')).json(); } catch { /* defaults */ }
   try { await api('GET', '/api/state'); } catch { if (!S) renderAuth(); }
-  if (S) announceUpdate();
+  if (S) {
+    announceUpdate();
+    const ws = S.score && S.score.weekStart; const prev = ws && new Date(ws); if (prev) prev.setDate(prev.getDate() - 7);
+    if (prev && !store.get(`recap.${prev.getTime()}`, false) && S.logs.length) enqueue(() => recapSheet(true));
+  }
 })();

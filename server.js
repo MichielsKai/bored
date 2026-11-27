@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { DatabaseSync } = require('node:sqlite');
 const { scoring } = require('./score');
+const { achievements } = require('./achievements');
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -105,6 +106,16 @@ CREATE TABLE IF NOT EXISTS known_devices (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_steps (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  done_at INTEGER,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_steps_item ON project_steps(item_id, position);
 CREATE TABLE IF NOT EXISTS friend_requests (
   from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -145,6 +156,17 @@ db.exec(`UPDATE auth_sessions SET sid = lower(hex(randomblob(8))) WHERE sid = ''
 
 const q = (sql) => db.prepare(sql);
 const score = scoring(db);
+db.exec(`CREATE TABLE IF NOT EXISTS high_fives (
+  from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL REFERENCES score_events(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  seen INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (from_id, event_id)
+); CREATE INDEX IF NOT EXISTS idx_hf_event ON high_fives(event_id);`);
+for (const col of ['quick', 'chill']) {
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('items') WHERE name = ?").get(col)) db.exec(`ALTER TABLE items ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
+}
+const ach = achievements(db, score);
 const tx = (fn) => {
   db.exec('BEGIN IMMEDIATE');
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -519,8 +541,11 @@ function addLog(user, item, minutes, endedAt, source, fromSpin = false) {
 function fmtH(min) { return `${Math.round((min / 60) * 10) / 10} h`; }
 
 function buildState(user) {
-  const items = q(`SELECT i.id, i.name, i.kind, i.archived, i.created_at,
-                     COALESCE(SUM(l.minutes), 0) AS minutes, MAX(l.ended_at) AS last_at, COUNT(l.id) AS sessions
+  const items = q(`SELECT i.id, i.name, i.kind, i.archived, i.created_at, i.quick, i.chill,
+                     COALESCE(SUM(l.minutes), 0) AS minutes, MAX(l.ended_at) AS last_at, COUNT(l.id) AS sessions,
+                     (SELECT COUNT(*) FROM project_steps s WHERE s.item_id = i.id) AS steps_total,
+                     (SELECT COUNT(*) FROM project_steps s WHERE s.item_id = i.id AND s.done_at IS NOT NULL) AS steps_done,
+                     (SELECT text FROM project_steps s WHERE s.item_id = i.id AND s.done_at IS NULL ORDER BY position LIMIT 1) AS next_step
                    FROM items i LEFT JOIN time_logs l ON l.item_id = i.id
                    WHERE i.user_id = ? GROUP BY i.id ORDER BY i.created_at`).all(user.id);
   const earned = q('SELECT COALESCE(SUM(minutes), 0) AS m FROM time_logs WHERE user_id = ?').get(user.id).m;
@@ -538,6 +563,10 @@ function buildState(user) {
     items,
     score: score.summary(user.id),
     friendRequests: q('SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?').get(user.id).n,
+    highFives: q(`SELECT u.username AS "from", e.kind, e.label, h.created_at AS at FROM high_fives h
+                  JOIN score_events e ON e.id = h.event_id JOIN users u ON u.id = h.from_id
+                  WHERE e.user_id = ? AND h.seen = 0 ORDER BY h.created_at DESC LIMIT 10`).all(user.id)
+      .map((h) => ({ from: h.from, text: momentText(h.kind, true), at: h.at })),
     timer: q(`SELECT t.item_id, t.started_at, t.from_spin, i.name AS item_name FROM timers t
               JOIN items i ON i.id = t.item_id WHERE t.user_id = ?`).get(user.id) || null,
     bank: {
@@ -785,6 +814,7 @@ function friendsView(user) {
   }
   return {
     board,
+    feed: feedFor(user, ids),
     friends: ids.slice(1).map((id) => names.get(id)).sort((x, y) => x.localeCompare(y)),
     incoming: q('SELECT u.username, r.created_at FROM friend_requests r JOIN users u ON u.id = r.from_id WHERE r.to_id = ? ORDER BY r.created_at DESC').all(user.id)
       .map((r) => ({ username: r.username, createdAt: r.created_at })),
@@ -803,6 +833,7 @@ route('POST', '/api/friends/request', true, (req, res, body, user) => {
       q('INSERT OR IGNORE INTO friendships (a, b, created_at) VALUES (?, ?, ?)').run(...pairOf(user.id, other.id), Date.now());
       q('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)').run(user.id, other.id, other.id, user.id);
     });
+    try { ach.check(other.id); } catch (e) { console.error('achievements', e); }
     return { ...friendsView(user), accepted: other.username };
   }
   if (friendIds(user.id).length >= 100) bad('You can have up to 100 friends');
@@ -818,6 +849,7 @@ route('POST', '/api/friends/accept', true, (req, res, body, user) => {
     q('INSERT OR IGNORE INTO friendships (a, b, created_at) VALUES (?, ?, ?)').run(...pairOf(user.id, other.id), Date.now());
     q('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)').run(user.id, other.id, other.id, user.id);
   });
+  try { ach.check(other.id); } catch (e) { console.error('achievements', e); }
   return friendsView(user);
 });
 route('POST', '/api/friends/decline', true, (req, res, body, user) => {
@@ -834,6 +866,127 @@ route('POST', '/api/friends/remove', true, (req, res, body, user) => {
   const other = otherUser(user, body.username);
   q('DELETE FROM friendships WHERE a = ? AND b = ?').run(...pairOf(user.id, other.id));
   return friendsView(user);
+});
+
+// --- project checklists
+function ownSteps(user, itemId) {
+  return q('SELECT id, text, done_at, position FROM project_steps WHERE item_id = ? AND user_id = ? ORDER BY position, id').all(itemId, user.id)
+    .map((x) => ({ id: x.id, text: x.text, done: !!x.done_at }));
+}
+route('GET', '/api/items/:id/steps', true, (req, res, body, user, p) => ({ steps: ownSteps(user, ownItem(user, p.id).id) }));
+route('POST', '/api/items/:id/steps', true, (req, res, body, user, p) => {
+  const item = ownItem(user, p.id);
+  const text = str(body.text, 'Step', 1, 120);
+  const n = q('SELECT COUNT(*) AS n, COALESCE(MAX(position), 0) AS m FROM project_steps WHERE item_id = ?').get(item.id);
+  if (n.n >= 100) bad('A project can have up to 100 steps');
+  q('INSERT INTO project_steps (user_id, item_id, text, position, created_at) VALUES (?, ?, ?, ?, ?)').run(user.id, item.id, text, n.m + 1, Date.now());
+  return { ...buildState(user), steps: ownSteps(user, item.id) };
+});
+route('PATCH', '/api/steps/:id', true, (req, res, body, user, p) => {
+  const st = q('SELECT * FROM project_steps WHERE id = ? AND user_id = ?').get(id(p.id), user.id);
+  if (!st) throw new HttpError(404, 'That step no longer exists');
+  const text = body.text !== undefined ? str(body.text, 'Step', 1, 120) : st.text;
+  const done = typeof body.done === 'boolean' ? (body.done ? (st.done_at || Date.now()) : null) : st.done_at;
+  q('UPDATE project_steps SET text = ?, done_at = ? WHERE id = ?').run(text, done, st.id);
+  return { ...buildState(user), steps: ownSteps(user, st.item_id) };
+});
+route('DELETE', '/api/steps/:id', true, (req, res, body, user, p) => {
+  const st = q('SELECT * FROM project_steps WHERE id = ? AND user_id = ?').get(id(p.id), user.id);
+  if (!st) throw new HttpError(404, 'That step no longer exists');
+  q('DELETE FROM project_steps WHERE id = ?').run(st.id);
+  return { ...buildState(user), steps: ownSteps(user, st.item_id) };
+});
+
+// --- spins (counted for achievements; one per 2 seconds at most)
+const lastSpin = new Map();
+route('POST', '/api/spin', true, (req, res, body, user) => {
+  const now = Date.now();
+  if (now - (lastSpin.get(user.id) || 0) >= 2000) { lastSpin.set(user.id, now); ach.bump(user.id, 'spins'); }
+  if (lastSpin.size > 10_000) lastSpin.clear();
+  return { ok: true };
+});
+
+// --- achievements
+route('GET', '/api/achievements', true, (req, res, body, user) => ({ achievements: ach.list(user.id) }));
+
+// --- high-fives on friends' moments
+// Moments are streak milestones, finished projects and achievements, shown without item names.
+function momentText(kind, own) {
+  let m;
+  if ((m = kind.match(/^streak-(\d+)$/))) return `${own ? 'your' : 'a'} ${m[1]}-day streak`;
+  if (kind.startsWith('finish-')) return `${own ? 'your' : 'a'} finished project`;
+  if ((m = kind.match(/^ach-(.+)$/))) { const a = ach.BY_KEY.get(m[1]); return `${own ? 'your' : 'an'} “${a ? a.name : 'achievement'}” badge`; }
+  return 'a moment';
+}
+function feedFor(user, ids) {
+  if (!ids.length) return [];
+  const marks = ids.map(() => '?').join(',');
+  return q(`SELECT e.id, e.kind, e.created_at, e.user_id, u.username,
+              (SELECT COUNT(*) FROM high_fives h WHERE h.event_id = e.id) AS fives,
+              (SELECT 1 FROM high_fives h WHERE h.event_id = e.id AND h.from_id = ?) AS mine
+            FROM score_events e JOIN users u ON u.id = e.user_id
+            WHERE e.user_id IN (${marks}) AND e.created_at > ? ORDER BY e.created_at DESC LIMIT 80`)
+    .all(user.id, ...ids, Date.now() - 14 * DAY)
+    .filter((e) => { const m = e.kind.match(/^ach-(.+)$/); return !m || (ach.BY_KEY.get(m[1]) || {}).tier !== 'bronze'; })
+    .slice(0, 40)
+    .map((e) => {
+      const you = e.user_id === user.id;
+      let m; let text;
+      if ((m = e.kind.match(/^streak-(\d+)$/))) text = `hit a ${m[1]}-day streak`;
+      else if (e.kind.startsWith('finish-')) text = 'finished a project';
+      else if ((m = e.kind.match(/^ach-(.+)$/))) { const a = ach.BY_KEY.get(m[1]); text = `unlocked “${a ? a.name : 'an achievement'}”`; }
+      else text = 'did something great';
+      return { id: e.id, username: e.username, you, text, at: e.created_at, fives: e.fives, fived: !!e.mine };
+    });
+}
+route('POST', '/api/high-five', true, (req, res, body, user) => {
+  limit(req, 'high-five', 120, 3600_000);
+  const e = q('SELECT id, user_id, created_at FROM score_events WHERE id = ?').get(id(body.eventId));
+  if (!e || e.user_id === user.id || !areFriends(user.id, e.user_id) || Date.now() - e.created_at > 30 * DAY) {
+    throw new HttpError(404, 'You can only high-five your friends’ recent moments');
+  }
+  q('INSERT OR IGNORE INTO high_fives (from_id, event_id, created_at) VALUES (?, ?, ?)').run(user.id, e.id, Date.now());
+  try { ach.check(e.user_id); } catch (err) { console.error('achievements', err); }
+  return friendsView(user);
+});
+route('POST', '/api/high-fives/seen', true, (req, res, body, user) => {
+  q('UPDATE high_fives SET seen = 1 WHERE seen = 0 AND event_id IN (SELECT id FROM score_events WHERE user_id = ?)').run(user.id);
+  return { ok: true };
+});
+
+// --- weekly recap: the last finished week
+function pointsBetween(userId, start, end) {
+  const a = q('SELECT COALESCE(SUM(points), 0) AS p, COALESCE(SUM(minutes), 0) AS m, COUNT(*) AS n FROM time_logs WHERE user_id = ? AND ended_at >= ? AND ended_at < ?').get(userId, start, end);
+  const b = q('SELECT COALESCE(SUM(points), 0) AS p FROM score_events WHERE user_id = ? AND created_at >= ? AND created_at < ?').get(userId, start, end).p;
+  return { points: a.p + b, minutes: a.m, sessions: a.n };
+}
+route('GET', '/api/recap', true, (req, res, body, user) => {
+  const end = score.startOfWeek(Date.now());
+  const back = (t, days) => { const d = new Date(t); d.setDate(d.getDate() - days); return d.getTime(); };
+  const start = back(end, 7), prevStart = back(end, 14);
+  const week = pointsBetween(user.id, start, end);
+  const prev = pointsBetween(user.id, prevStart, start);
+  const perDay = new Map();
+  for (const r of q('SELECT ended_at, minutes FROM time_logs WHERE user_id = ? AND ended_at >= ? AND ended_at < ?').all(user.id, start, end)) {
+    const k = new Date(r.ended_at).toDateString(); perDay.set(k, (perDay.get(k) || 0) + r.minutes);
+  }
+  const bestDay = [...perDay.entries()].sort((a, b) => b[1] - a[1])[0];
+  const ids = [user.id, ...friendIds(user.id)];
+  const standings = ids.map((uid) => ({ uid, ...pointsBetween(uid, start, end) })).sort((a, b) => b.points - a.points || b.minutes - a.minutes);
+  return {
+    start, end,
+    minutes: week.minutes, points: week.points, sessions: week.sessions, daysActive: perDay.size,
+    prevMinutes: prev.minutes, prevPoints: prev.points,
+    bestDay: bestDay ? { day: new Date(bestDay[0]).getTime(), minutes: bestDay[1] } : null,
+    top: q(`SELECT i.name, i.kind, SUM(l.minutes) AS minutes FROM time_logs l JOIN items i ON i.id = l.item_id
+            WHERE l.user_id = ? AND l.ended_at >= ? AND l.ended_at < ? GROUP BY i.id ORDER BY minutes DESC LIMIT 3`).all(user.id, start, end),
+    rank: ids.length > 1 ? standings.findIndex((x) => x.uid === user.id) + 1 : null,
+    people: ids.length,
+    achievements: q('SELECT key FROM user_achievements WHERE user_id = ? AND unlocked_at >= ? AND unlocked_at < ?').all(user.id, start, end)
+      .map((r) => { const a = ach.BY_KEY.get(r.key); return a ? { name: a.name, tier: a.tier, cat: a.cat } : null; }).filter(Boolean),
+    highFives: q('SELECT COUNT(*) AS n FROM high_fives h JOIN score_events e ON e.id = h.event_id WHERE e.user_id = ? AND h.created_at >= ? AND h.created_at < ?').get(user.id, start, end).n,
+    buys: q('SELECT COUNT(*) AS n FROM purchases WHERE user_id = ? AND created_at >= ? AND created_at < ?').get(user.id, start, end).n,
+  };
 });
 
 // --- admin
@@ -881,7 +1034,8 @@ route('POST', '/api/items', true, (req, res, body, user) => {
   const name = str(body.name, 'Name', 1, 60);
   const kind = KINDS.includes(body.kind) ? body.kind : 'hobby';
   if (q('SELECT COUNT(*) AS n FROM items WHERE user_id = ?').get(user.id).n >= 200) bad('You can have up to 200 things');
-  q('INSERT INTO items (user_id, name, kind, created_at) VALUES (?, ?, ?, ?)').run(user.id, name, kind, Date.now());
+  q('INSERT INTO items (user_id, name, kind, created_at, quick, chill) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(user.id, name, kind, Date.now(), body.quick === true ? 1 : 0, body.chill === true ? 1 : 0);
   return buildState(user);
 });
 route('PATCH', '/api/items/:id', true, (req, res, body, user, p) => {
@@ -889,7 +1043,9 @@ route('PATCH', '/api/items/:id', true, (req, res, body, user, p) => {
   const name = body.name !== undefined ? str(body.name, 'Name', 1, 60) : item.name;
   const kind = KINDS.includes(body.kind) ? body.kind : item.kind;
   const archived = body.archived !== undefined ? (body.archived ? 1 : 0) : item.archived;
-  q('UPDATE items SET name = ?, kind = ?, archived = ? WHERE id = ?').run(name, kind, archived, item.id);
+  const quick = typeof body.quick === 'boolean' ? (body.quick ? 1 : 0) : item.quick;
+  const chill = typeof body.chill === 'boolean' ? (body.chill ? 1 : 0) : item.chill;
+  q('UPDATE items SET name = ?, kind = ?, archived = ?, quick = ?, chill = ? WHERE id = ?').run(name, kind, archived, quick, chill, item.id);
   if (archived) q('DELETE FROM timers WHERE user_id = ? AND item_id = ?').run(user.id, item.id);
   const bonus = archived && !item.archived ? score.finishBonus(user.id, { ...item, name, kind }) : null;
   return { ...buildState(user), bonus };
@@ -963,6 +1119,11 @@ route('POST', '/api/wishes', true, (req, res, body, user) => {
   return buildState(user);
 });
 route('DELETE', '/api/wishes/:id', true, (req, res, body, user, p) => {
+  const w = q('SELECT * FROM wishes WHERE id = ? AND user_id = ?').get(id(p.id), user.id);
+  if (w && !w.bought_at && Date.now() - w.created_at >= 3 * DAY) {
+    ach.bump(user.id, 'wishes_resisted');
+    if (w.price) ach.bump(user.id, 'money_saved', w.price);
+  }
   q('DELETE FROM wishes WHERE id = ? AND user_id = ?').run(id(p.id), user.id);
   return buildState(user);
 });
@@ -1040,6 +1201,20 @@ function serveStatic(req, res, pathname) {
 }
 
 // ---------- server ----------
+// Achievements are checked after every change, and on loading the app at most every 10 minutes
+// (for ones that depend on time passing or on friends).
+const lastStateCheck = new Map();
+function wantsAchievementCheck(req, pathname, user) {
+  if (['/api/logout', '/api/account/delete', '/api/password', '/api/high-fives/seen'].includes(pathname)) return false;
+  if (req.method !== 'GET') return 'full';
+  if (pathname !== '/api/state') return false;
+  const now = Date.now();
+  if (now - (lastStateCheck.get(user.id) || 0) < 10 * 60_000) return 'deliver';
+  if (lastStateCheck.size > 10_000) lastStateCheck.clear();
+  lastStateCheck.set(user.id, now);
+  return 'full';
+}
+
 async function handle(req, res) {
   securityHeaders(req, res);
   let pathname;
@@ -1072,7 +1247,16 @@ async function handle(req, res) {
       if (!user) throw new HttpError(401, 'Sign in to continue');
     }
     const body = req.method === 'GET' ? {} : await readBody(req);
-    send(res, 200, await r.handler(req, res, body, user, params));
+    const out = await r.handler(req, res, body, user, params);
+    const mode = user && out && typeof out === 'object' ? wantsAchievementCheck(req, pathname, user) : false;
+    if (mode) {
+      try {
+        if (mode === 'full') ach.check(user.id);
+        const unseen = ach.deliver(user.id);
+        if (unseen.length) out.achievements = unseen;
+      } catch (e) { console.error('achievements', e); }
+    }
+    send(res, 200, out);
   } catch (e) {
     if (!(e instanceof HttpError)) console.error(e);
     if (e.status === 413) res.setHeader('Connection', 'close');

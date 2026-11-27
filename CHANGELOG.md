@@ -11,6 +11,11 @@ Version numbers are **major.minor.patch**. Kai decides whether a release is mino
 - **A points reveal** after you log time, showing every bonus you earned.
 - **Friends and a leaderboard.** Add friends by username and compare points this week, this month or all time. Friends only see your points, hours and streak, never what you're doing or what's on your wishlist.
 - **What's new**, this screen: see which version you're on and what changed.
+- **Quick filters** above the wheel: only spin between things that take under 30 minutes, that suit a low-energy moment, or of a certain kind. Tag your things in My stuff.
+- **Project checklists.** Break a project into steps and tick them off. When the wheel picks a project, it shows the next step.
+- **High-fives.** See your friends' big moments (streaks, finished projects, achievements) and give them a high-five. You'll get a notice when someone high-fives yours.
+- **Weekly recap.** When a new week starts you get last week's highlights: hours, points, your best day, what you spent the most time on, and where you finished among your friends. It's also in Stats any time.
+- **50 achievements**, from your first spin to a year-long streak, each worth bonus points. Five of them are legendary and absurdly hard. Good luck.
 
 ### Changed
 - The line above a spin result no longer assumes it's evening.

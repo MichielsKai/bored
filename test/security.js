@@ -438,6 +438,66 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     await post('/api/timer/cancel', {}, { cookie: f3 });
   });
 
+  console.log('\nChecklists, high-fives, achievements, recap');
+  await check('nobody can read or change someone else’s project steps', async () => {
+    const st = await post('/api/items', { name: 'Shed', kind: 'project' }, { cookie: f1 });
+    const itemId = st.json.items.find((i) => i.name === 'Shed').id;
+    const r = await post(`/api/items/${itemId}/steps`, { text: 'Buy wood' }, { cookie: f1 });
+    const stepId = r.json.steps[0].id;
+    assert.equal((await req('GET', `/api/items/${itemId}/steps`, { cookie: f2 })).status, 404);
+    assert.equal((await post(`/api/items/${itemId}/steps`, { text: 'pwned' }, { cookie: f2 })).status, 404);
+    assert.equal((await req('PATCH', `/api/steps/${stepId}`, { cookie: f2, body: { done: true, text: 'pwned' } })).status, 404);
+    assert.equal((await req('DELETE', `/api/steps/${stepId}`, { cookie: f2, body: {} })).status, 404);
+    const mine = await req('GET', `/api/items/${itemId}/steps`, { cookie: f1 });
+    assert.deepEqual(mine.json.steps.map((x) => [x.text, x.done]), [['Buy wood', false]]);
+  });
+  await check('high-fives only for friends’ moments, never your own or strangers’', async () => {
+    // fiona and gus are friends; hana isn't friends with either now. Give each a 7-day streak moment.
+    {
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(path.join(DATA, 'bored.db'));
+      for (const u of ['fiona', 'gus']) {
+        db.prepare("INSERT INTO score_events (user_id, kind, day, points, label, created_at) VALUES ((SELECT id FROM users WHERE username = ?), 'streak-7', 'test', 750, '7-day streak', ?)").run(u, Date.now());
+      }
+      db.close();
+    }
+    const ev = (await req('GET', '/api/friends', { cookie: f2 })).json.feed;
+    const fionaMoment = ev.find((e) => e.username === 'fiona');
+    const gusMoment = ev.find((e) => e.you);
+    assert.ok(fionaMoment && gusMoment, 'moments missing from the feed');
+    assert.equal(fionaMoment.text, 'hit a 7-day streak');
+    assert.equal((await post('/api/high-five', { eventId: gusMoment.id }, { cookie: f2 })).status, 404, 'high-fived own moment');
+    assert.equal((await post('/api/high-five', { eventId: fionaMoment.id }, { cookie: f3 })).status, 404, 'stranger high-fived');
+    assert.equal((await post('/api/high-five', { eventId: fionaMoment.id }, { cookie: f2 })).status, 200);
+    const again = await post('/api/high-five', { eventId: fionaMoment.id }, { cookie: f2 });
+    assert.equal(again.json.feed.find((e) => e.id === fionaMoment.id).fives, 1, 'counted twice');
+    const fiona = (await req('GET', '/api/state', { cookie: f1 })).json;
+    assert.equal(fiona.highFives[0].from, 'gus');
+    assert.ok(!JSON.stringify((await req('GET', '/api/friends', { cookie: f3 })).json.feed).includes('fiona'), 'stranger sees the feed');
+    assert.equal((await post('/api/high-five', { eventId: 999999 }, { cookie: f2 })).status, 404);
+  });
+  await check('achievements and recap only ever show your own data', async () => {
+    const a = await req('GET', '/api/achievements', { cookie: f3 });
+    assert.equal(a.json.achievements.length, 50);
+    const r = await req('GET', '/api/recap', { cookie: f3 });
+    assert.ok(!JSON.stringify(r.json).includes('secret-hobby-xyz'));
+    assert.equal((await req('GET', '/api/recap')).status, 401);
+  });
+  await check('quickly added and removed wishes don’t count as “resisted”', async () => {
+    for (let i = 0; i < 5; i++) {
+      const w = await post('/api/wishes', { name: `farm-${i}`, price: 1000 }, { cookie: f3 });
+      await req('DELETE', `/api/wishes/${w.json.wishes.find((x) => x.name === `farm-${i}`).id}`, { cookie: f3, body: {} });
+    }
+    const a = (await req('GET', '/api/achievements', { cookie: f3 })).json.achievements;
+    assert.equal(a.find((x) => x.key === 'changed-my-mind').unlockedAt, null);
+    assert.equal(a.find((x) => x.key === 'savings-account').current, 0);
+  });
+  await check('spins are counted at most once every 2 seconds', async () => {
+    for (let i = 0; i < 10; i++) await post('/api/spin', {}, { cookie: f3 });
+    const a = (await req('GET', '/api/achievements', { cookie: f3 })).json.achievements;
+    assert.equal(a.find((x) => x.key === 'spin-doctor').current, 1);
+  });
+
   await check('what’s new lists released versions as plain JSON', async () => {
     const r = await req('GET', '/api/changelog');
     assert.equal(r.status, 200);
