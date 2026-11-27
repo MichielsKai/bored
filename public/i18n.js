@@ -483,4 +483,12 @@ const NL = {
   'Earn your next buy': 'Verdien je volgende aankoop',
   'Every {h} hours on your own stuff unlocks one new purchase. Until then, park what you want on your wishlist.': 'Elke {h} uur aan je eigen spullen speelt één nieuwe aankoop vrij. Tot dan parkeer je wat je wilt op je verlanglijst.',
   'Add friends to compare points, play the weekly challenge and keep each other’s streaks going.': 'Voeg vrienden toe om punten te vergelijken, de weekuitdaging te spelen en elkaars reeksen gaande te houden.',
+  // ---- secret themes
+  'Secret themes': 'Geheime thema’s', 'Walnut': 'Notelaar', 'Doodle': 'Krabbel',
+  'You scrolled all the way down. Here’s something most people never find.': 'Je scrolde helemaal naar beneden. Hier is iets wat de meeste mensen nooit vinden.',
+  'Real wood, brass and paper. Very serious.': 'Echt hout, koper en papier. Heel serieus.',
+  'Felt-tips on notebook paper. Not serious at all.': 'Stiftjes op schriftpapier. Helemaal niet serieus.',
+  'Back to the normal look': 'Terug naar het gewone uiterlijk',
+  'A secret theme is on, so theme and colour are taking a break.': 'Er staat een geheim thema aan, dus thema en kleur nemen even pauze.',
+  'Secret theme on: {name}': 'Geheim thema aan: {name}',
 };

@@ -6,6 +6,7 @@ Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 ## Unreleased
 
 ### Nieuw
+- **Er zit iets verstopt in Instellingen.** Blijf scrollen.
 - **Een korte uitleg** voor nieuwe accounts, zodat je weet hoe het rad, de timer en aankopen verdienen werken. Je kunt hem opnieuw bekijken via Instellingen.
 - **Personaliseren** (in Instellingen): licht of donker thema, zes accentkleuren, tekstgrootte, aparte schakelaars voor geluid, trillen en confetti, de duur van een draai, het scherm aan houden tijdens een timer, de timer in het browsertabblad, hoeveel het rad vergeten dingen voortrekt, de timer meteen starten na een draai, je munt en hoe uren getoond worden. Je keuzes volgen je naar elk toestel.
 - **Privacykeuzes**: in privémodus zien vrienden je niet in hun klassement, feed of uitdagingen; je kunt ook stoppen met je momenten te delen, duwtjes uitzetten en de pop-ups voor het weekoverzicht en badges uitzetten.

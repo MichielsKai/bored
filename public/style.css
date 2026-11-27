@@ -645,3 +645,133 @@ section > .goal:first-child, .goal + .tiles { margin-top: 0; }
 :root[data-text="large"] .timerbar { gap: 8px; }
 :root[data-text="large"] .timerbar .clock { font-size: 1.05rem; }
 :root[data-text="large"] .timerbar .btn { padding: 0 12px; }
+
+/* =====================================================================
+   Secret themes (Settings → Personalise, scroll all the way down)
+   ===================================================================== */
+@font-face { font-family: 'Cormorant Garamond'; font-weight: 600; font-style: normal; font-display: swap; src: url(/themes/cormorant-garamond-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Cormorant Garamond'; font-weight: 700; font-style: normal; font-display: swap; src: url(/themes/cormorant-garamond-latin-700-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Patrick Hand'; font-weight: 400; font-style: normal; font-display: swap; src: url(/themes/patrick-hand-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Permanent Marker'; font-weight: 400; font-style: normal; font-display: swap; src: url(/themes/permanent-marker-latin-400-normal.woff2) format('woff2'); }
+
+/* ---------- Walnut: a serious, photographic desk ----------
+   Walnut wood under everything, cream paper cards, burgundy ink, brass details, a classic serif. */
+:root[data-skin="walnut"] {
+  --bg: #24150C; --surface: #EFE6D2; --surface-2: #E1D4B8; --divider: #CDBB98;
+  --text: #F3E9D2; --text-2: #CBB896;
+  --accent: #7A1F2B; --accent-ink: #F7EEDC; --accent-soft: #E9D5CC; --danger: #9B2230;
+  --shadow: 0 1px 1px rgba(0,0,0,.35), 0 6px 14px rgba(0,0,0,.35), 0 22px 40px rgba(0,0,0,.28);
+  --serif: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+  --brass: linear-gradient(160deg, #F3DA93 0%, #C9A04A 35%, #8C6A22 60%, #E2C477 85%, #9C7A30 100%);
+  color-scheme: dark;
+}
+:root[data-skin="walnut"] body { background: #24150C; }
+:root[data-skin="walnut"] body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 80% at 50% 0%, rgba(255,214,160,.10), transparent 60%), radial-gradient(140% 100% at 50% 50%, transparent 55%, rgba(0,0,0,.55)), url(/themes/walnut.jpg) center / cover;
+}
+/* paper cards: dark ink on cream */
+:root[data-skin="walnut"] :is(.surface, .list, .board, dialog#sheet, .nav, .version-btn, .top .icon-btn, .bankpill, .fchip, .hub, .challenge, .goal, .streak, #toast) {
+  --text: #2A1D14; --text-2: #6E5B47; color: var(--text);
+  background-color: #EFE6D2; background-image: url(/themes/paper.jpg); background-size: 512px;
+}
+:root[data-skin="walnut"] .surface, :root[data-skin="walnut"] .list, :root[data-skin="walnut"] .board { border-radius: 6px; box-shadow: var(--shadow); }
+:root[data-skin="walnut"] dialog#sheet { border-radius: 10px 10px 0 0; box-shadow: 0 -10px 40px rgba(0,0,0,.5); }
+:root[data-skin="walnut"] .surface .input, :root[data-skin="walnut"] .sheet-body .input, :root[data-skin="walnut"] .input { background: rgba(255,255,255,.55); box-shadow: inset 0 1px 2px rgba(60,35,10,.25); color: #2A1D14; }
+:root[data-skin="walnut"] :is(h1, h2, .logo, .tile .v, .hero-points, .big, .pr-num, .rank-big, .tour h2, .score, .pts b) { font-family: var(--serif); font-weight: 700; letter-spacing: 0; }
+:root[data-skin="walnut"] .logo { font-size: 2rem; font-style: italic; color: #F3E9D2; text-shadow: 0 1px 0 rgba(0,0,0,.6), 0 0 18px rgba(255,200,120,.12); }
+:root[data-skin="walnut"] h2 { font-size: 1.5rem; }
+:root[data-skin="walnut"] main > .section > h2, :root[data-skin="walnut"] .section-head h2 { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+:root[data-skin="walnut"] .btn { border-radius: 6px; }
+:root[data-skin="walnut"] .btn.primary { background: linear-gradient(#8E2A37, #6A1823); box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 2px 4px rgba(0,0,0,.35); text-shadow: 0 -1px 0 rgba(0,0,0,.35); }
+:root[data-skin="walnut"] .btn:not(.primary):not(.ghost):not(.danger) { background: linear-gradient(#F5EDDA, #DDCFB0); color: #2A1D14; box-shadow: inset 0 1px 0 #fff8, 0 1px 3px rgba(0,0,0,.3); }
+:root[data-skin="walnut"] .btn.ghost { color: #E9C987; }
+:root[data-skin="walnut"] :is(.surface, dialog#sheet, .list) .btn.ghost { color: var(--accent); }
+:root[data-skin="walnut"] .meter-track { background: rgba(0,0,0,.35); box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
+:root[data-skin="walnut"] .meter-fill, :root[data-skin="walnut"] .goal-ring .fill { background: var(--brass); stroke: #B8913E; }
+:root[data-skin="walnut"] .wheel-wrap canvas { box-shadow: 0 18px 40px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.5); }
+:root[data-skin="walnut"] .hub { background: var(--brass); color: #2A1D14; font-family: var(--serif); font-size: 1.35rem; font-weight: 700;
+  box-shadow: inset 0 2px 3px rgba(255,255,255,.6), inset 0 -3px 6px rgba(80,50,0,.5), 0 6px 14px rgba(0,0,0,.55); text-shadow: 0 1px 0 rgba(255,240,200,.6); }
+:root[data-skin="walnut"] .pointer { color: #C9A04A; filter: drop-shadow(0 3px 3px rgba(0,0,0,.6)); }
+:root[data-skin="walnut"] .nav { box-shadow: 0 -6px 24px rgba(0,0,0,.45); }
+:root[data-skin="walnut"] .nav button[aria-current="page"] .ico { background: var(--accent); color: var(--accent-ink); }
+:root[data-skin="walnut"] .timerbar { background: linear-gradient(#8E2A37, #5E141E); box-shadow: var(--shadow); border-radius: 6px; }
+:root[data-skin="walnut"] .timerbar .clock { font-family: var(--serif); font-size: 1.6rem; }
+:root[data-skin="walnut"] .hint, :root[data-skin="walnut"] main .muted { text-shadow: 0 1px 1px rgba(0,0,0,.4); }
+:root[data-skin="walnut"] :is(.surface, dialog#sheet, .list, .board) :is(.hint, .muted) { text-shadow: none; }
+:root[data-skin="walnut"] .seg { background: rgba(60,35,15,.14); }
+:root[data-skin="walnut"] .flame { background: #EAD3C0; }
+:root[data-skin="walnut"] .tour-art { background: var(--brass); color: #3A2410; }
+
+/* ---------- Doodle: a notebook full of felt-tip drawings ----------
+   Lined paper, wobbly black outlines, flat cartoon shadows, a marker font. */
+:root[data-skin="doodle"] {
+  --bg: #FFFDF6; --surface: #FFFFFF; --surface-2: #F1EEE4; --divider: #1E1E1E;
+  --text: #1E1E1E; --text-2: #55524B;
+  --accent: #FF6B6B; --accent-ink: #1E1E1E; --accent-soft: #FFE1DE; --danger: #D7263D;
+  --font: "Patrick Hand", "Comic Sans MS", "Chalkboard SE", cursive;
+  --marker: "Permanent Marker", "Patrick Hand", cursive;
+  --ink: #1E1E1E;
+  --wobble: 18px 6px 16px 8px / 8px 16px 6px 18px;
+  --shadow: 4px 4px 0 var(--ink);
+  color-scheme: light;
+}
+:root[data-skin="doodle"] body {
+  font-size: 1.12rem;
+  background:
+    linear-gradient(90deg, transparent 38px, #F4A6A6 38px, #F4A6A6 40px, transparent 40px),
+    repeating-linear-gradient(#FFFDF6 0 30px, #C9DCF2 30px 31px);
+  background-attachment: local;
+}
+:root[data-skin="doodle"] :is(.surface, .list, .board, .version-btn, .top .icon-btn, .bankpill, .fchip, .challenge, .goal, .streak, .tile, .input, .seg, .snooze-note, .steps, .key) {
+  border: 2.5px solid var(--ink); border-radius: var(--wobble); box-shadow: var(--shadow);
+}
+:root[data-skin="doodle"] .tiles .tile.surface { border-radius: 8px 20px 10px 16px / 18px 8px 20px 10px; }
+:root[data-skin="doodle"] .list > li + li, :root[data-skin="doodle"] .board > li + li { border-top: 2px dashed #1E1E1E33; }
+:root[data-skin="doodle"] dialog#sheet { border: 3px solid var(--ink); border-bottom: 0; border-radius: 28px 12px 0 0 / 18px 26px 0 0; box-shadow: 0 -4px 0 var(--ink); }
+:root[data-skin="doodle"] :is(h1, h2, h3, .logo, .tile .v, .big, .pr-num, .rank-big, .score, .pts b, .clock, .hub) { font-family: var(--marker); font-weight: 400; letter-spacing: 0.01em; }
+:root[data-skin="doodle"] .logo { font-size: 2rem; transform: rotate(-3deg); color: var(--ink); text-shadow: 3px 3px 0 #FFD166; }
+:root[data-skin="doodle"] h2 { transform: rotate(-1deg); display: inline-block; background: linear-gradient(transparent 60%, #FFE066 60%, #FFE066 88%, transparent 88%); padding: 0 4px; }
+:root[data-skin="doodle"] .btn { border: 2.5px solid var(--ink); border-radius: 14px 6px 12px 8px / 8px 12px 6px 14px; box-shadow: 3px 3px 0 var(--ink); font-family: var(--font); font-size: 1.1rem; transition: transform .08s, box-shadow .08s; }
+:root[data-skin="doodle"] .btn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+:root[data-skin="doodle"] .btn.ghost, :root[data-skin="doodle"] .btn.danger { border-style: dashed; box-shadow: none; }
+:root[data-skin="doodle"] .btn.primary { background: #FF6B6B; color: var(--ink); }
+:root[data-skin="doodle"] .btn:not(.primary):not(.ghost):not(.danger) { background: #FFF; color: var(--ink); }
+:root[data-skin="doodle"] .seg button[aria-selected="true"], :root[data-skin="doodle"] .seg button[aria-pressed="true"] { background: #FFE066; border: 2px solid var(--ink); }
+:root[data-skin="doodle"] .fchip[aria-pressed="true"] { background: #4ECDC4; color: var(--ink); }
+:root[data-skin="doodle"] .meter-track { border: 2.5px solid var(--ink); background: #FFF; height: 16px; }
+:root[data-skin="doodle"] .meter-fill { background: repeating-linear-gradient(-45deg, #FF6B6B 0 8px, #FF8E8E 8px 14px); border-right: 2.5px solid var(--ink); }
+:root[data-skin="doodle"] .goal-ring .track { stroke: #FFF; } :root[data-skin="doodle"] .goal-ring .fill { stroke: #4ECDC4; }
+:root[data-skin="doodle"] .wheel-wrap canvas { box-shadow: 6px 6px 0 var(--ink); border-radius: 50%; }
+:root[data-skin="doodle"] .hub { background: #FFE066; color: var(--ink); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); font-size: 1.4rem; }
+:root[data-skin="doodle"] .pointer { color: var(--ink); filter: drop-shadow(2px 2px 0 #FF6B6B); }
+:root[data-skin="doodle"] .nav { border-top: 3px solid var(--ink); box-shadow: none; background: #FFFDF6; }
+:root[data-skin="doodle"] .nav button[aria-current="page"] .ico { background: #FFE066; color: var(--ink); border: 2px solid var(--ink); }
+:root[data-skin="doodle"] .timerbar { background: #4ECDC4; color: var(--ink); border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); border-radius: var(--wobble); }
+:root[data-skin="doodle"] .timerbar .btn { background: #FFF; color: var(--ink); }
+:root[data-skin="doodle"] #toast { background: #FFE066; color: var(--ink); border: 2.5px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); border-radius: var(--wobble); }
+:root[data-skin="doodle"] .flame { background: #FFE1DE; border: 2px solid var(--ink); }
+:root[data-skin="doodle"] .avatar { border: 2px solid var(--ink); }
+:root[data-skin="doodle"] .toggle .track { border: 2px solid var(--ink); }
+:root[data-skin="doodle"] .tour-art { background: #FFE066; color: var(--ink); border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); transform: rotate(-4deg); }
+
+/* ---------- the secret corner itself ---------- */
+.secret { margin-top: 90vh; padding-top: 24px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.secret .muted { margin: 0; }
+.skin-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.skin-card { display: flex; flex-direction: column; gap: 8px; padding: 0 0 12px; border: 0; border-radius: 16px; overflow: hidden; background: var(--surface-2); color: var(--text); cursor: pointer; font: inherit; text-align: center; }
+.skin-card[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 2px; }
+.skin-card b { font-size: 1.05rem; }
+.skin-card .small { padding: 0 10px; }
+.skin-prev { height: 96px; display: grid; place-items: center; }
+.skin-prev i { width: 64px; height: 64px; border-radius: 50%; display: block; }
+.skin-prev.walnut { background: url(/themes/walnut.jpg) center / 300px; }
+.skin-prev.walnut i { background: conic-gradient(#7A1F2B 0 25%, #1F4D3A 0 50%, #1E3557 0 75%, #8A6A1F 0); border: 5px solid #C9A04A; box-shadow: 0 6px 12px rgba(0,0,0,.6); }
+.skin-prev.doodle { background: repeating-linear-gradient(#FFFDF6 0 14px, #C9DCF2 14px 15px); }
+.skin-prev.doodle i { background: conic-gradient(#FF6B6B 0 25%, #4ECDC4 0 50%, #FFE066 0 75%, #C49BFF 0); border: 3px solid #1E1E1E; box-shadow: 3px 3px 0 #1E1E1E; transform: rotate(-8deg); }
+.skin-card b.walnut-name { font-family: "Cormorant Garamond", Georgia, serif; font-size: 1.3rem; }
+.skin-card b.doodle-name { font-family: "Permanent Marker", cursive; font-weight: 400; }
+:root[data-skin="walnut"] .kinds input:checked + label { background: var(--accent); color: var(--accent-ink); }
+:root[data-skin="walnut"] .input, :root[data-skin="walnut"] .surface .input, :root[data-skin="walnut"] .sheet-body .input { background: #F8F2E4; color: #2A1D14; }
+:root[data-skin="walnut"] .input::placeholder { color: #8A7660; }
+:root[data-skin="doodle"] .goal-ring .track { stroke: #E9E4D6; }

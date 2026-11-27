@@ -866,6 +866,7 @@ function otherUser(user, username) {
 // Each setting has a fixed list of allowed values; anything else is refused.
 const PREFS = {
   theme: ['system', 'light', 'dark'],
+  skin: ['none', 'walnut', 'doodle'],   // the secret themes
   accent: ['indigo', 'teal', 'rose', 'amber', 'green', 'plum'],
   textSize: ['normal', 'small', 'large'],
   sound: [true, false], haptics: [true, false], confetti: [true, false],
@@ -1446,7 +1447,7 @@ function securityHeaders(req, res) {
 // ---------- static files ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2',
 };
 // Only files that exist in public/ at startup can ever be served.
 const STATIC = new Map();

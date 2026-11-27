@@ -625,7 +625,7 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal((await req('GET', '/api/friends', { cookie: f1 })).json.challenge.wins, 0, 'fiona won with nothing');
   });
   await check('settings: only known settings, only allowed values, only for yourself', async () => {
-    for (const prefs of [{ theme: 'neon' }, { nope: true }, { private: 'yes' }, JSON.parse('{"__proto__": {"isAdmin": true}}'), [], 'dark', null]) {
+    for (const prefs of [{ theme: 'neon' }, { skin: 'matrix' }, { nope: true }, { private: 'yes' }, JSON.parse('{"__proto__": {"isAdmin": true}}'), [], 'dark', null]) {
       assert.equal((await req('PATCH', '/api/settings', { body: { prefs }, cookie: f1 })).status, 400, JSON.stringify(prefs));
     }
     const r = await req('PATCH', '/api/settings', { body: { prefs: { theme: 'dark', accent: 'teal' } }, cookie: f1 });

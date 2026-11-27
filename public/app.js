@@ -26,7 +26,7 @@ const store = {
 // Saved with your account (so phone and laptop match) and kept on this device so the look applies at once.
 const PREF_DEFAULTS = {
   theme: 'system', accent: 'indigo', textSize: 'normal', sound: true, haptics: true, confetti: true, spin: 'normal',
-  wakeLock: false, tabTitle: false, neglect: 'normal', autoTimer: false, currency: 'EUR', timeFormat: 'decimal',
+  skin: 'none', wakeLock: false, tabTitle: false, neglect: 'normal', autoTimer: false, currency: 'EUR', timeFormat: 'decimal',
   private: false, shareMoments: true, allowNudges: true, popups: true, tourDone: false,
 };
 function prefs() {
@@ -38,11 +38,13 @@ const pref = (k) => prefs()[k];
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 function applyLook(p = prefs()) {
   const root = document.documentElement;
-  const dark = p.theme === 'dark' || (p.theme === 'system' && darkQuery.matches);
+  const skin = p.skin && p.skin !== 'none' ? p.skin : '';
+  // a secret theme brings its own colours, so light/dark and the accent step aside
+  const dark = !skin && (p.theme === 'dark' || (p.theme === 'system' && darkQuery.matches));
   root.dataset.mode = dark ? 'dark' : 'light';
-  root.dataset.accent = p.accent;
+  if (skin) { root.dataset.skin = skin; delete root.dataset.accent; } else { delete root.dataset.skin; root.dataset.accent = p.accent; }
   root.dataset.text = p.textSize;
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.content = dark ? '#111215' : '#F3F4F7'; m.removeAttribute('media'); });
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.content = skin === 'walnut' ? '#24150C' : skin === 'doodle' ? '#FFFDF6' : dark ? '#111215' : '#F3F4F7'; m.removeAttribute('media'); });
 }
 applyLook();
 darkQuery.addEventListener?.('change', () => applyLook());
@@ -224,7 +226,12 @@ function listedFor(ts) {
 const day = (ts) => new Date(ts).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
 const money = (p) => p == null ? '' : new Intl.NumberFormat(LOCALE, { style: 'currency', currency: pref('currency'), maximumFractionDigits: p % 1 ? 2 : 0 }).format(p);
 const currencySign = () => ({ EUR: '€', USD: '$', GBP: '£' })[pref('currency')] || '€';
-const colorOf = (item) => INKS[(item.id - 1) % INKS.length];
+// Slice colours: pastels normally, jewel tones in Walnut, felt-tips in Doodle.
+const SKIN_INKS = {
+  walnut: ['#7A1F2B', '#1F4D3A', '#1E3557', '#8A6A1F', '#4A2A4F', '#2F5D62', '#6B3A1E'],
+  doodle: ['#FF6B6B', '#4ECDC4', '#FFE066', '#C49BFF', '#FF9F1C', '#7BD389', '#74B9FF'],
+};
+const colorOf = (item) => { const inks = SKIN_INKS[pref('skin')] || INKS; return inks[(item.id - 1) % inks.length]; };
 const active = () => S.items.filter((i) => !i.archived);
 const snoozed = (i) => i.snoozed_until > now();
 const onWheel = () => active().filter((i) => !snoozed(i));
@@ -996,6 +1003,7 @@ function personaliseSheet() {
   const row = (label, control, hint = '') => `<div class="pref"><span>${label}</span>${control}${hint ? `<p class="hint">${hint}</p>` : ''}</div>`;
   openSheet(`${sheetHead(T('Personalise'))}
     <section class="pref-group"><h3>${T('Look')}</h3>
+      ${p.skin !== 'none' ? `<p class="snooze-note">${T('A secret theme is on, so theme and colour are taking a break.')} <button class="auth-switch" data-act="skin" data-v="none">${T('Back to the normal look')}</button></p>` : ''}
       ${row(T('Theme'), seg('theme', [['system', T('Automatic')], ['light', T('Light')], ['dark', T('Dark')]]))}
       ${row(T('Colour'), `<div class="swatches" role="group" aria-label="${T('Colour')}">${Object.entries(ACCENTS).map(([k, c]) =>
         `<button class="swatch" style="--c:${c}" data-act="pref" data-k="accent" data-v="${k}" aria-pressed="${p.accent === k}" aria-label="${T(k[0].toUpperCase() + k.slice(1))}"></button>`).join('')}</div>`)}
@@ -1028,12 +1036,24 @@ function personaliseSheet() {
         ${toggle('popups', T('Weekly recap and badge popups'), T('Badges still unlock and the recap stays under Stats.'))}
       </div>
     </section>
-    <button class="btn block" data-act="settings">${T('Back to settings')}</button>`);
+    <button class="btn block" data-act="settings">${T('Back to settings')}</button>
+    <section class="secret" aria-label="${T('Secret themes')}">
+      <p class="muted small">${T('You scrolled all the way down. Here’s something most people never find.')}</p>
+      <h3>${T('Secret themes')}</h3>
+      <div class="skin-cards">
+        <button class="skin-card" data-act="skin" data-v="walnut" aria-pressed="${p.skin === 'walnut'}"><span class="skin-prev walnut"><i></i></span>
+          <b class="walnut-name">${T('Walnut')}</b><span class="muted small">${T('Real wood, brass and paper. Very serious.')}</span></button>
+        <button class="skin-card" data-act="skin" data-v="doodle" aria-pressed="${p.skin === 'doodle'}"><span class="skin-prev doodle"><i></i></span>
+          <b class="doodle-name">${T('Doodle')}</b><span class="muted small">${T('Felt-tips on notebook paper. Not serious at all.')}</span></button>
+      </div>
+      ${p.skin !== 'none' ? `<button class="btn ghost block" data-act="skin" data-v="none">${T('Back to the normal look')}</button>` : ''}
+    </section>`);
 }
 async function setPref(key, value) {
   const before = prefs()[key];
   S.user.prefs = { ...prefs(), [key]: value }; store.set('prefs', S.user.prefs); applyLook(S.user.prefs);
   if (key === 'wakeLock' || key === 'tabTitle') tickTimer();
+  if (key === 'skin') render();
   try { await api('PATCH', '/api/settings', { prefs: { [key]: value } }); }
   catch (e) { S.user.prefs = { ...prefs(), [key]: before }; applyLook(); toast(e.message); }
 }
@@ -1304,6 +1324,8 @@ function drawWheel() {
     const s = { item, start: a, end: a + span };
     a += span; return s;
   });
+  const skin = pref('skin');
+  if (skin === 'walnut' || skin === 'doodle') { drawSkinnedWheel(ctx, canvas, c, R, dpr, skin); return; }
   const css2 = getComputedStyle(document.body);
   const rim = css2.getPropertyValue('--surface').trim() || '#FFFFFF';
 
@@ -1341,6 +1363,120 @@ function drawWheel() {
   }
   ctx.globalAlpha = 1;
   ctx.restore();
+}
+// --- The secret themes draw their own wheel.
+// Walnut: a real prize wheel. Wood rim, brass ring and pegs, jewel-toned slices, light from the top left.
+// Doodle: felt-tip slices, crayon hatching, wobbly black outlines that look drawn by hand.
+const skinFonts = { walnut: '700 24px "Cormorant Garamond"', doodle: '24px "Patrick Hand"' };
+let woodImg = null;
+function wood() {
+  if (!woodImg) { woodImg = new Image(); woodImg.src = '/themes/walnut.jpg'; woodImg.onload = () => { if (view === 'spin') drawWheel(); }; }
+  return woodImg.complete && woodImg.naturalWidth ? woodImg : null;
+}
+const wobble = (seed) => { const x = Math.sin(seed * 12.9898) * 43758.5453; return x - Math.floor(x) - 0.5; };   // the same "random" every frame
+function wobblyCircle(ctx, r, amp, seed, steps = 72) {
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * TAU, rr = r + wobble(seed + (i % steps)) * amp;
+    i ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+}
+function drawSkinnedWheel(ctx, canvas, c, R, dpr, skin) {
+  if (document.fonts && !document.fonts.check(skinFonts[skin])) document.fonts.load(skinFonts[skin]).then(() => drawWheel()).catch(() => {});
+  const walnut = skin === 'walnut';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save(); ctx.translate(c, c);
+  const inner = walnut ? R * 0.86 : R * 0.92;
+  if (walnut) {
+    // wooden rim, rounded by light and shade
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU);
+    const w = wood(); ctx.fillStyle = w ? ctx.createPattern(w, 'repeat') : '#4A2A18'; ctx.fill();
+    const g = ctx.createRadialGradient(0, 0, inner, 0, 0, R);
+    g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(0.3, 'rgba(255,225,180,.16)'); g.addColorStop(0.75, 'rgba(0,0,0,.05)'); g.addColorStop(1, 'rgba(0,0,0,.6)');
+    ctx.fillStyle = g; ctx.fill();
+  } else {
+    ctx.fillStyle = '#FFFFFF'; wobblyCircle(ctx, R * 0.985, 1.2 * dpr, 3); ctx.fill();
+  }
+  ctx.rotate(wheelRot);
+  // slices
+  for (const s of wheelSlices) {
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, inner, s.start, s.end); ctx.closePath();
+    ctx.fillStyle = colorOf(s.item); ctx.fill();
+  }
+  ctx.save(); ctx.beginPath(); ctx.arc(0, 0, inner, 0, TAU); ctx.clip();
+  if (walnut) {
+    // a lacquered, slightly domed face
+    const g = ctx.createRadialGradient(-inner * 0.2, -inner * 0.25, inner * 0.05, 0, 0, inner);
+    g.addColorStop(0, 'rgba(255,240,215,.22)'); g.addColorStop(0.6, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.42)');
+    ctx.fillStyle = g; ctx.fillRect(-inner, -inner, inner * 2, inner * 2);
+  } else {
+    // crayon hatching across the whole face
+    ctx.strokeStyle = 'rgba(30,30,30,.09)'; ctx.lineWidth = 2.2 * dpr;
+    for (let x = -inner * 1.5; x < inner * 1.5; x += 7 * dpr) { ctx.beginPath(); ctx.moveTo(x, -inner); ctx.lineTo(x + inner * 0.9, inner); ctx.stroke(); }
+  }
+  // dim the others when one wins
+  if (wheelWinner && wheelDim > 0) for (const s of wheelSlices) {
+    if (s.item.id === wheelWinner) continue;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, inner, s.start, s.end); ctx.closePath();
+    ctx.fillStyle = walnut ? `rgba(20,10,5,${0.62 * wheelDim})` : `rgba(255,253,246,${0.7 * wheelDim})`; ctx.fill();
+  }
+  ctx.restore();
+  // dividers
+  if (wheelSlices.length > 1) for (const s of wheelSlices) {
+    const x = Math.cos(s.start) * inner, y = Math.sin(s.start) * inner;
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    if (walnut) { ctx.lineTo(x, y); ctx.strokeStyle = '#C9A04A'; ctx.lineWidth = 2.2 * dpr; }
+    else {
+      const k = wobble(s.item.id) * 0.18, mx = Math.cos(s.start + k) * inner * 0.5, my = Math.sin(s.start + k) * inner * 0.5;
+      ctx.quadraticCurveTo(mx, my, x, y); ctx.strokeStyle = '#1E1E1E'; ctx.lineWidth = 3.2 * dpr; ctx.lineCap = 'round';
+    }
+    ctx.stroke();
+  }
+  if (walnut) {
+    // brass ring and pegs
+    ctx.beginPath(); ctx.arc(0, 0, inner + 1.5 * dpr, 0, TAU);
+    const b = ctx.createLinearGradient(-inner, -inner, inner, inner);
+    b.addColorStop(0, '#F3DA93'); b.addColorStop(0.45, '#9C7A30'); b.addColorStop(0.7, '#E2C477'); b.addColorStop(1, '#7A5C1E');
+    ctx.strokeStyle = b; ctx.lineWidth = 4 * dpr; ctx.stroke();
+    const pegR = (inner + R) / 2;
+    for (const s of wheelSlices) {
+      const x = Math.cos(s.start) * pegR, y = Math.sin(s.start) * pegR;
+      ctx.beginPath(); ctx.arc(x + 1.2 * dpr, y + 1.8 * dpr, 4.6 * dpr, 0, TAU); ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fill();
+      const pg = ctx.createRadialGradient(x - 1.5 * dpr, y - 1.5 * dpr, 0.5 * dpr, x, y, 4.6 * dpr);
+      pg.addColorStop(0, '#FFF3C4'); pg.addColorStop(0.45, '#D4AE55'); pg.addColorStop(1, '#6E5218');
+      ctx.beginPath(); ctx.arc(x, y, 4.4 * dpr, 0, TAU); ctx.fillStyle = pg; ctx.fill();
+    }
+  } else {
+    ctx.strokeStyle = '#1E1E1E'; ctx.lineWidth = 3.6 * dpr; ctx.lineJoin = 'round';
+    wobblyCircle(ctx, inner, 1.6 * dpr, 11); ctx.stroke();
+    ctx.lineWidth = 1.6 * dpr; wobblyCircle(ctx, inner + 3 * dpr, 2.2 * dpr, 29); ctx.stroke();
+  }
+  // labels, kept upright
+  for (const s of wheelSlices) {
+    const mid = (s.start + s.end) / 2;
+    const arc = (s.end - s.start) * inner * 0.62;
+    const size = Math.max(12 * dpr, Math.min(inner * (walnut ? 0.085 : 0.09), arc * 0.55));
+    const flip = Math.cos(mid + wheelRot) < 0;
+    ctx.save(); ctx.rotate(flip ? mid + Math.PI : mid);
+    ctx.globalAlpha = wheelWinner && s.item.id !== wheelWinner ? 1 - 0.6 * wheelDim : 1;
+    ctx.font = walnut ? `700 ${size}px "Cormorant Garamond", Georgia, serif` : `${size}px "Patrick Hand", "Comic Sans MS", cursive`;
+    ctx.fillStyle = walnut ? '#F7EEDC' : '#1E1E1E';
+    if (walnut) { ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 2 * dpr; ctx.shadowOffsetY = 1 * dpr; }
+    ctx.textAlign = flip ? 'left' : 'right'; ctx.textBaseline = 'middle';
+    ctx.fillText(fit(ctx, s.item.name, inner * 0.64 - 20 * dpr), flip ? -(inner - 14 * dpr) : inner - 14 * dpr, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+  if (walnut) {
+    // a soft reflection on the lacquer, fixed while the wheel turns
+    ctx.save(); ctx.translate(c, c);
+    ctx.beginPath(); ctx.arc(0, 0, inner, 0, TAU); ctx.clip();
+    const hl = ctx.createLinearGradient(-inner, -inner, inner * 0.3, inner * 0.3);
+    hl.addColorStop(0, 'rgba(255,255,255,.16)'); hl.addColorStop(0.45, 'rgba(255,255,255,.03)'); hl.addColorStop(0.46, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl; ctx.fillRect(-inner, -inner, inner * 2, inner * 2);
+    ctx.restore();
+  }
 }
 function fit(ctx, text, maxW) {
   if (ctx.measureText(text).width <= maxW) return text;
@@ -1941,6 +2077,13 @@ document.addEventListener('click', async (e) => {
       case 'log-edit': editLogSheet(id); break;
       case 'goal': goalSheet(); break;
       case 'personalise': personaliseSheet(); break;
+      case 'skin': {
+        const y = sheet.scrollTop;
+        await setPref('skin', el.dataset.v);
+        personaliseSheet(); sheet.scrollTop = y;
+        if (el.dataset.v !== 'none') { FX.cannons(90); SFX.fanfare(); toast(T('Secret theme on: {name}', { name: T(el.dataset.v === 'walnut' ? 'Walnut' : 'Doodle') })); }
+        break;
+      }
       case 'pref': {
         const key = el.dataset.k; let v = el.dataset.v;
         el.closest('[role="group"]')?.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === el)));

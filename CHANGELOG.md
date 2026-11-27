@@ -6,6 +6,7 @@ Version numbers are **major.minor.patch**. Kai decides whether a release is mino
 ## Unreleased
 
 ### New
+- **Something is hidden in Settings.** Keep scrolling.
 - **A short tutorial** for new accounts, so you know how the wheel, the timer and earning buys work. You can replay it from Settings.
 - **Personalise** (in Settings): light or dark theme, six accent colours, text size, separate switches for sounds, vibration and confetti, spin length, keeping the screen on during a timer, the timer in the browser tab, how much the wheel favours forgotten things, starting the timer straight after a spin, your currency, and how hours are shown. Your choices follow you to every device.
 - **Privacy choices**: private mode hides you from friends' leaderboards, feeds and challenges; you can also stop sharing your moments, turn off nudges, and turn off the weekly recap and badge popups.
