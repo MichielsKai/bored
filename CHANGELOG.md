@@ -3,6 +3,12 @@
 This list also appears in the app (Settings → What's new), so it's written for the people using bored?. The Dutch version is CHANGELOG.nl.md: keep both in step.
 Version numbers are **major.minor.patch**. Kai decides whether a release is minor or major.
 
+## 1.1.1 — 2026-11-27
+
+### Fixed
+- Updates now reach every device straight away. Before, a phone or tablet could keep showing the old version for hours.
+- Signed-in devices no longer shows “1 Jan” for logins from before version 1.0.
+
 ## 1.1.0 — 2026-11-27
 
 ### New

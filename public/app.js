@@ -783,7 +783,7 @@ async function loadDevices() {
     const others = sessions.filter((x) => !x.current).length;
     el.innerHTML = `<ul class="list">${sessions.map((x) => `<li><div class="plain-row">
         <div class="main"><div class="name">${esc(TS(x.device))}</div>
-          <div class="muted small">${x.current ? T('This device') : T('{seen}, signed in {date}', { seen: seen(x.lastSeen), date: esc(day(x.createdAt)) })}</div></div>
+          <div class="muted small">${x.current ? T('This device') : x.createdAt ? T('{seen}, signed in {date}', { seen: seen(x.lastSeen), date: esc(day(x.createdAt)) }) : seen(x.lastSeen)}</div></div>
         ${x.current ? '' : `<button class="btn small" data-act="session-revoke" data-id="${esc(x.id)}">${T('Sign out')}</button>`}
       </div></li>`).join('')}</ul>
       ${others ? `<button class="btn ghost" data-act="sessions-others">${T('Sign out all other devices')}</button>` : ''}

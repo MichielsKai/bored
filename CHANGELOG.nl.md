@@ -3,6 +3,12 @@
 Nederlandse versie van CHANGELOG.md, getoond in de app (Instellingen → Wat is er nieuw) als die in het Nederlands staat.
 Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 
+## 1.1.1 — 2026-11-27
+
+### Opgelost
+- Updates komen nu meteen op elk toestel aan. Voordien kon een gsm of tablet urenlang de oude versie blijven tonen.
+- Aangemelde toestellen toont niet langer “1 jan” voor aanmeldingen van voor versie 1.0.
+
 ## 1.1.0 — 2026-11-27
 
 ### Nieuw

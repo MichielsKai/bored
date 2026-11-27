@@ -123,6 +123,13 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal(r.headers['referrer-policy'], 'no-referrer');
     assert.ok(r.headers['permissions-policy']);
   });
+  await check('the page asks for this version’s scripts, so updates aren’t stuck in a cache', async () => {
+    const html = (await req('GET', '/')).text;
+    for (const f of ['/app.js', '/i18n.js', '/style.css']) assert.match(html, new RegExp(`"${f.replace('.', '\\.')}\\?v=[\\w%-]+"`), `${f} has no version`);
+    const js = await req('GET', html.match(/"(\/app\.js\?v=[^"]+)"/)[1]);
+    assert.equal(js.status, 200);
+    assert.match(js.text, /renderAuth/);
+  });
   await check('API responses are never cached', async () => {
     assert.equal((await req('GET', '/api/config')).headers['cache-control'], 'no-store');
   });

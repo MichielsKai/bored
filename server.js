@@ -1264,10 +1264,23 @@ const STATIC = new Map();
     else if (MIME[path.extname(e.name)]) STATIC.set(`/${prefix}${e.name}`, { file: full, type: MIME[path.extname(e.name)] });
   }
 })(PUBLIC_DIR, '');
+// The page asks for its scripts and styles with the version in the address (/app.js?v=…).
+// Cloudflare and browsers may keep those files for hours, so a new address per version is
+// the only reliable way to make every device pick up an update straight away.
+{
+  const v = encodeURIComponent(APP_VERSION === 'dev' ? String(Date.now()) : APP_VERSION);
+  const page = STATIC.get('/index.html');
+  page.body = Buffer.from(fs.readFileSync(page.file, 'utf8')
+    .replace(/(src|href)="(\/(?:app|i18n)\.js|\/style\.css|\/fonts\/fonts\.css)"/g, (m, attr, url) => `${attr}="${url}?v=${v}"`));
+}
 function serveStatic(req, res, pathname) {
   const entry = STATIC.get(pathname) || (path.extname(pathname) ? null : STATIC.get('/index.html'));
   if (!entry) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
   if (entry === STATIC.get('/index.html') && req.method === 'GET') countVisit('page_views');
+  if (entry.body) {
+    res.writeHead(200, { 'Content-Type': entry.type, 'Cache-Control': 'no-cache' });
+    return res.end(req.method === 'HEAD' ? undefined : entry.body);
+  }
   fs.readFile(entry.file, (err, data) => {
     if (err) { res.writeHead(500); return res.end(); }
     const longCache = /\.(png|svg|woff2)$/.test(entry.file);
