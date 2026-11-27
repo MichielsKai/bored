@@ -174,6 +174,35 @@ const tx = (fn) => {
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
 };
 
+// ---------- site stats ----------
+// Totals per day for the admin's stats screen: page views, requests, sign-ins and so on.
+// Only counts are kept, never who or from where. "Active people" needs to know who was already
+// counted today, so those ids are kept for today only and dropped once the day is over.
+db.exec(`CREATE TABLE IF NOT EXISTS site_daily (
+  day TEXT NOT NULL, key TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, key)
+);
+CREATE TABLE IF NOT EXISTS site_active_today (day TEXT NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (day, user_id));`);
+const pad2 = (n) => String(n).padStart(2, '0');
+const localDay = (ts = Date.now()) => { const d = new Date(ts); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const traffic = new Map();   // "day|key" → count, written to the database every minute
+const countVisit = (key, by = 1) => { const k = `${localDay()}|${key}`; traffic.set(k, (traffic.get(k) || 0) + by); };
+function flushTraffic() {
+  if (!traffic.size) return;
+  const up = q('INSERT INTO site_daily (day, key, value) VALUES (?, ?, ?) ON CONFLICT(day, key) DO UPDATE SET value = value + excluded.value');
+  const rows = [...traffic]; traffic.clear();
+  try { tx(() => { for (const [k, n] of rows) { const [day, key] = k.split('|'); up.run(day, key, n); } }); }
+  catch (e) { console.error('traffic', e); }
+}
+const activeSeen = new Set();
+function markActive(userId) {
+  const day = localDay(), k = `${day}|${userId}`;
+  if (activeSeen.has(k)) return;
+  if (activeSeen.size > 50_000) activeSeen.clear();
+  activeSeen.add(k);
+  if (q('INSERT OR IGNORE INTO site_active_today (day, user_id) VALUES (?, ?)').run(day, userId).changes) countVisit('active');
+}
+setInterval(flushTraffic, 60_000).unref();
+
 // ---------- errors & logging ----------
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = (msg) => { throw new HttpError(400, msg); };
@@ -660,11 +689,13 @@ route('POST', '/api/login', false, async (req, res, body) => {
     if (!ok) {
       recordFailure(key, req);
       secLog('login-failed', { user: username, ip: clientIp(req), device: dev ? 'known' : 'new' });
+      countVisit('signins_failed');
       throw new HttpError(401, 'Wrong username or password');
     }
     clearFailures(key);
     if (needsRehash) q('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(await hashPassword(password), '', u.id);
     startSession(req, res, u.id);
+    countVisit('signins');
     rememberDevice(req, res, u.id);
     return { ok: true };
   });
@@ -997,6 +1028,58 @@ route('GET', '/api/admin/users', true, (req, res, body, user) => {
       .map((u) => ({ id: u.id, username: u.username, isAdmin: !!u.is_admin, createdAt: u.created_at, lastSeen: u.last_seen, resetPending: !!u.reset_pending, you: u.id === user.id })),
   };
 });
+// Site stats for the admin: totals and per-day numbers, never anything about one person.
+const STARTED_AT = Date.now();
+route('GET', '/api/admin/stats', true, (req, res, body, user) => {
+  requireAdmin(user);
+  flushTraffic();
+  const asked = Number(new URL(req.url, 'http://local').searchParams.get('days'));
+  const days = [7, 30, 90, 365].includes(asked) ? asked : 30;
+  const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - (days - 1));
+  const from = start.getTime(), now = Date.now();
+  const one = (sql, ...a) => q(sql).get(...a).n || 0;
+  // one row per day, oldest first
+  const list = [];
+  for (const d = new Date(from); d.getTime() <= now; d.setDate(d.getDate() + 1)) list.push({ day: localDay(d.getTime()) });
+  const byDay = new Map(list.map((r) => [r.day, r]));
+  const put = (rows, key) => { for (const r of rows) { const d = byDay.get(r.day); if (d) d[key] = (d[key] || 0) + r.n; } };
+  const dayOf = (col) => `date(${col} / 1000, 'unixepoch', 'localtime')`;
+  put(q(`SELECT ${dayOf('ended_at')} AS day, SUM(minutes) AS n FROM time_logs WHERE ended_at >= ? GROUP BY day`).all(from), 'minutes');
+  put(q(`SELECT ${dayOf('ended_at')} AS day, COUNT(*) AS n FROM time_logs WHERE ended_at >= ? GROUP BY day`).all(from), 'sessions');
+  put(q(`SELECT ${dayOf('ended_at')} AS day, SUM(points) AS n FROM time_logs WHERE ended_at >= ? GROUP BY day`).all(from), 'points');
+  put(q(`SELECT ${dayOf('created_at')} AS day, SUM(points) AS n FROM score_events WHERE created_at >= ? GROUP BY day`).all(from), 'points');
+  put(q(`SELECT ${dayOf('created_at')} AS day, COUNT(*) AS n FROM users WHERE created_at >= ? GROUP BY day`).all(from), 'signups');
+  for (const r of q('SELECT day, key, value FROM site_daily WHERE day >= ?').all(localDay(from))) {
+    const d = byDay.get(r.day); if (d) d[r.key] = r.value;
+  }
+  const keys = ['minutes', 'sessions', 'points', 'signups', 'page_views', 'requests', 'api', 'active', 'signins', 'signins_failed', 'blocked', 'errors'];
+  const daily = list.map((d) => Object.fromEntries([['day', d.day], ...keys.map((k) => [k, d[k] || 0])]));
+  const sum = (k) => daily.reduce((a, d) => a + d[k], 0);
+  let dbBytes = 0;
+  for (const f of ['bored.db', 'bored.db-wal']) { try { dbBytes += fs.statSync(path.join(DATA_DIR, f)).size; } catch { /* no wal yet */ } }
+  return {
+    days,
+    totals: {
+      accounts: one('SELECT COUNT(*) AS n FROM users'),
+      active7: one('SELECT COUNT(DISTINCT user_id) AS n FROM auth_sessions WHERE last_seen > ?', now - 7 * DAY),
+      active30: one('SELECT COUNT(DISTINCT user_id) AS n FROM auth_sessions WHERE last_seen > ?', now - 30 * DAY),
+      minutes: one('SELECT COALESCE(SUM(minutes), 0) AS n FROM time_logs'),
+      sessions: one('SELECT COUNT(*) AS n FROM time_logs'),
+      points: one('SELECT COALESCE(SUM(points), 0) AS n FROM time_logs') + one('SELECT COALESCE(SUM(points), 0) AS n FROM score_events'),
+      items: one('SELECT COUNT(*) AS n FROM items'),
+      wishes: one('SELECT COUNT(*) AS n FROM wishes'),
+      purchases: one('SELECT COUNT(*) AS n FROM purchases'),
+      friendships: one('SELECT COUNT(*) AS n FROM friendships'),
+      achievements: one("SELECT COUNT(*) AS n FROM score_events WHERE kind LIKE 'ach-%'"),
+      highFives: one('SELECT COUNT(*) AS n FROM high_fives'),
+      spins: one("SELECT COALESCE(SUM(value), 0) AS n FROM user_counters WHERE key = 'spins'"),
+      timersRunning: one('SELECT COUNT(*) AS n FROM timers'),
+    },
+    period: Object.fromEntries(keys.map((k) => [k, sum(k)])),
+    daily,
+    server: { release: APP_RELEASE, version: APP_VERSION, upSince: STARTED_AT, dbBytes, memoryBytes: process.memoryUsage().rss, node: process.version },
+  };
+});
 route('POST', '/api/admin/users/:id/reset', true, (req, res, body, user, p) => {
   requireAdmin(user);
   const target = q('SELECT id, username FROM users WHERE id = ?').get(id(p.id));
@@ -1184,6 +1267,7 @@ const STATIC = new Map();
 function serveStatic(req, res, pathname) {
   const entry = STATIC.get(pathname) || (path.extname(pathname) ? null : STATIC.get('/index.html'));
   if (!entry) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
+  if (entry === STATIC.get('/index.html') && req.method === 'GET') countVisit('page_views');
   fs.readFile(entry.file, (err, data) => {
     if (err) { res.writeHead(500); return res.end(); }
     const longCache = /\.(png|svg|woff2)$/.test(entry.file);
@@ -1213,6 +1297,11 @@ async function handle(req, res) {
   try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { pathname = '/'; }
 
   if (pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+  countVisit('requests');
+  res.once('finish', () => {
+    if (res.statusCode === 429) countVisit('blocked');
+    else if (res.statusCode >= 500) countVisit('errors');
+  });
   if (!pathname.startsWith('/api/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
     return serveStatic(req, res, pathname);
@@ -1220,6 +1309,7 @@ async function handle(req, res) {
 
   try {
     // Overall per-IP cap on API use, to protect the Pi.
+    countVisit('api');
     const wait = hit(`api:${ipKey(clientIp(req))}`, 600, 5 * 60_000);
     if (wait) throw new HttpError(429, `Slow down a little. Try again in ${waitText(wait)}.`);
 
@@ -1237,6 +1327,7 @@ async function handle(req, res) {
     if (r.auth) {
       user = currentSession(req);
       if (!user) throw new HttpError(401, 'Sign in to continue');
+      markActive(user.id);
     }
     const body = req.method === 'GET' ? {} : await readBody(req);
     const out = await r.handler(req, res, body, user, params);
@@ -1270,6 +1361,8 @@ const cleanup = () => {
   q('DELETE FROM auth_sessions WHERE expires_at < ? OR last_seen < ?').run(Date.now(), Date.now() - SESSION_IDLE);
   q('DELETE FROM password_resets WHERE expires_at < ?').run(Date.now());
   q('DELETE FROM login_failures WHERE until < ? AND updated < ?').run(Date.now() - 3600_000, Date.now() - 3600_000);
+  q('DELETE FROM site_active_today WHERE day <> ?').run(localDay());
+  q('DELETE FROM site_daily WHERE day < ?').run(localDay(Date.now() - 400 * DAY));
 };
 cleanup();
 setInterval(cleanup, 3600_000).unref();
@@ -1278,6 +1371,6 @@ process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 process.on('uncaughtException', (e) => { console.error('uncaughtException', e); process.exit(1); });
 
 server.listen(PORT, () => console.log(`bored? ${APP_RELEASE} (${APP_VERSION}) listening on :${PORT} (data in ${DATA_DIR}, trust proxy: ${TRUST_PROXY})`));
-const shutdown = () => { server.close(); db.close(); process.exit(0); };
+const shutdown = () => { server.close(); try { flushTraffic(); } catch { /* closing anyway */ } db.close(); process.exit(0); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

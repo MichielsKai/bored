@@ -18,6 +18,7 @@ Hou dezelfde versies en dezelfde volgorde aan als in CHANGELOG.md.
 - **50 prestaties**, van je eerste draai tot een reeks van een jaar, elk goed voor bonuspunten. Vijf ervan zijn legendarisch en absurd moeilijk. Succes.
 - **Nederlands.** bored? spreekt nu ook Nederlands. Het volgt de taal van je toestel, en je kunt wisselen in Instellingen of op het aanmeldscherm.
 - **Een privacyverklaring** in Instellingen en op het aanmeldscherm die in gewone woorden uitlegt wat er bewaard wordt en wie het ziet.
+- **Sitecijfers voor de beheerder** in Instellingen: accounts, actieve mensen, genoteerde uren, punten, paginabezoeken en aanmeldingen, per dag en in totaal. Alleen totalen worden geteld, nooit wie wat deed.
 
 ### Gewijzigd
 - **Iedereen kan een account maken.** Je hebt geen uitnodigingscode meer nodig.

@@ -706,7 +706,7 @@ function privacySheet() {
       <h3>${T('What’s stored')}</h3>
       <p>${T('Your username and password, and what you add: your stuff, time, wishlist, purchases, friends, high-fives and achievements. Your password is only kept as a scrambled hash that can’t be turned back into the password.')}</p>
       <h3>${T('Who sees it')}</h3>
-      <p>${T('You. Friends see your points, hours and streak, and moments like streaks and badges, never what you do or what’s on your wishlist. The admin sees usernames and when accounts were made and last used, to keep the site running.')}</p>
+      <p>${T('You. Friends see your points, hours and streak, and moments like streaks and badges, never what you do or what’s on your wishlist. The admin sees usernames and when accounts were made and last used, to keep the site running, plus site-wide totals like visits per day, never who did what.')}</p>
       <h3>${T('Cookies')}</h3>
       <p>${T('Only the ones needed to keep you signed in and to recognise your devices. No ads, trackers or analytics. Your language and sound choices stay in your browser.')}</p>
       <h3>${T('Security')}</h3>
@@ -733,7 +733,11 @@ function settingsSheet() {
       <h3>${T('Language')}</h3>
       ${langSwitch()}
     </div>
-    ${u.isAdmin ? `<div class="sheet-section"><div class="section-head"><h3>${T('People')}</h3><span class="muted small">${Tn(u.userCount, '1 account', '{n} accounts')}</span></div><div id="people"><p class="hint">${T('Loading…')}</p></div></div>` : ''}
+    ${u.isAdmin ? `<div class="sheet-section"><div class="section-head"><h3>${T('People')}</h3><span class="muted small">${Tn(u.userCount, '1 account', '{n} accounts')}</span></div><div id="people"><p class="hint">${T('Loading…')}</p></div>
+      <button class="version-btn" data-act="stats" style="margin-top:12px">
+        <span class="main"><b>${T('Site stats')}</b><span class="muted small">${T('Accounts, hours, points and traffic')}</span></span>
+        <span class="chev">${ICON.chev}</span>
+      </button></div>` : ''}
     <div class="sheet-section">
       <h3>${T('Signed-in devices')}</h3>
       <div id="devices"><p class="hint">${T('Loading…')}</p></div>
@@ -799,6 +803,100 @@ async function loadPeople() {
       <p class="hint">${T('Forgot their password? Reset gives you a one-time code to send them. It works for 24 hours.')}</p>`;
   } catch (e) { const el = $('#people', sheet); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
 }
+
+// --- Site stats (admin only): totals, a few day-by-day charts, and the same numbers as a table
+let statsDays = store.get('statsDays', 30), STATS = null;
+const STAT_CHARTS = [
+  ['minutes', 'Hours logged per day'],
+  ['active', 'People active per day'],
+  ['page_views', 'Page views per day'],
+  ['signups', 'New accounts per day'],
+];
+const statVal = (key, v) => (key === 'minutes' ? hm(v) : nf.format(v));
+const statDay = (d) => new Date(`${d}T12:00:00`).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
+function statCaption(key, i) {
+  const d = STATS.daily[i];
+  return `${i === STATS.daily.length - 1 ? T('Today') : esc(statDay(d.day))}: <b>${esc(statVal(key, d[key]))}</b>`;
+}
+function selectStatBar(btn) {
+  const box = btn.closest('.stat-chart'); if (!box || !STATS) return;
+  box.querySelectorAll('[data-act="stat-bar"]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+  $('.chart-caption', box).innerHTML = statCaption(box.dataset.key, Number(btn.dataset.i));
+}
+async function statsSheet(days = statsDays) {
+  let r;
+  try { r = await api('GET', `/api/admin/stats?days=${days}`); } catch (e) { toast(e.message); return; }
+  STATS = r; statsDays = r.days; store.set('statsDays', r.days);
+  const t = r.totals, p = r.period, n = r.daily.length, last = n - 1;
+  const tile = (v, k) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  const chart = ([key, title]) => {
+    const max = Math.max(1, ...r.daily.map((d) => d[key]));
+    const peak = Math.max(...r.daily.map((d) => d[key]));
+    const side = key === 'active' ? T('busiest day: {n}', { n: nf.format(peak) }) : T('total: {n}', { n: statVal(key, p[key]) });
+    return `<section class="stat-chart stack" data-key="${key}">
+      <div class="section-head"><h3>${T(title)}</h3><span class="muted small">${esc(side)}</span></div>
+      <p class="chart-caption">${statCaption(key, last)}</p>
+      <div class="daybars" style="--n:${n};--gap:${n > 40 ? 1 : 2}px">${r.daily.map((d, i) => `<button data-act="stat-bar" data-i="${i}" aria-pressed="${i === last}" aria-label="${esc(statDay(d.day))}: ${esc(statVal(key, d[key]))}">
+        <span class="bar ${d[key] ? '' : 'zero'}" style="height:${(d[key] / max) * 100}%"></span></button>`).join('')}</div>
+      <div class="daybars-axis" aria-hidden="true"><span>${esc(statDay(r.daily[0].day))}</span><span>${esc(statDay(r.daily[Math.floor(last / 2)].day))}</span><span>${T('Today')}</span></div>
+    </section>`;
+  };
+  const row = (k, v) => `<li><div class="plain-row"><div class="main">${k}</div><b>${v}</b></div></li>`;
+  const mb = (b) => T('{n} MB', { n: nf1.format(b / 1048576) });
+  const since = new Date(r.server.upSince).toLocaleString(LOCALE, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  openSheet(`${sheetHead(T('Site stats'))}
+    <div class="tiles">
+      ${tile(nf.format(t.accounts), T('accounts'))}
+      ${tile(nf.format(t.active7), T('active in the last 7 days'))}
+      ${tile(nf.format(t.active30), T('active in the last 30 days'))}
+      ${tile(round1(t.minutes / 60), T('hours logged'))}
+      ${tile(nf.format(t.points), T('points earned'))}
+      ${tile(nf.format(t.sessions), T('sessions logged'))}
+    </div>
+    <div class="seg" role="group" aria-label="${T('Period')}">${[[7, T('7 days')], [30, T('30 days')], [90, T('90 days')]].map(([d, l]) =>
+      `<button data-act="stats-days" data-v="${d}" aria-pressed="${d === r.days}">${l}</button>`).join('')}</div>
+    <div class="tiles">
+      ${tile(nf.format(p.page_views), T('page views'))}
+      ${tile(nf.format(p.signins), T('sign-ins'))}
+      ${tile(nf.format(p.signups), T('new accounts'))}
+    </div>
+    ${STAT_CHARTS.map(chart).join('')}
+    <details class="more"><summary>${T('Show as a table')}</summary>
+      <div class="table-wrap"><table class="stat-table">
+        <thead><tr><th>${T('Day')}</th><th>${T('Hours')}</th><th>${T('Active')}</th><th>${T('Views')}</th><th>${T('New')}</th><th>${T('Sign-ins')}</th></tr></thead>
+        <tbody>${r.daily.slice().reverse().map((d) => `<tr><td>${esc(statDay(d.day))}</td><td>${round1(d.minutes / 60)}</td><td>${nf.format(d.active)}</td><td>${nf.format(d.page_views)}</td><td>${nf.format(d.signups)}</td><td>${nf.format(d.signins)}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </details>
+    <div class="stack"><h3>${T('Traffic in this period')}</h3><ul class="list">
+      ${row(T('Requests'), nf.format(p.requests))}
+      ${row(T('App data requests'), nf.format(p.api))}
+      ${row(T('Failed sign-ins'), nf.format(p.signins_failed))}
+      ${row(T('Blocked for going too fast'), nf.format(p.blocked))}
+      ${row(T('Server errors'), nf.format(p.errors))}
+    </ul></div>
+    <div class="stack"><h3>${T('Everything so far')}</h3><ul class="list">
+      ${row(T('Things on wheels'), nf.format(t.items))}
+      ${row(T('Spins'), nf.format(t.spins))}
+      ${row(T('Timers running now'), nf.format(t.timersRunning))}
+      ${row(T('Wishes waiting'), nf.format(t.wishes))}
+      ${row(T('Purchases earned'), nf.format(t.purchases))}
+      ${row(T('Friendships'), nf.format(t.friendships))}
+      ${row(T('Achievements unlocked'), nf.format(t.achievements))}
+      ${row(T('High-fives'), nf.format(t.highFives))}
+    </ul></div>
+    <div class="stack"><h3>${T('Server')}</h3><ul class="list">
+      ${row(T('Version'), esc(r.server.release))}
+      ${row(T('Running since'), esc(since))}
+      ${row(T('Database'), esc(mb(r.server.dbBytes)))}
+      ${row(T('Memory in use'), esc(mb(r.server.memoryBytes)))}
+    </ul>
+    <p class="hint">${T('Only totals are counted: nothing here says who did what. Day-by-day traffic starts from the version that added this screen.')}</p></div>`);
+}
+// hovering a bar with a mouse shows that day, like tapping it does
+document.addEventListener('pointerover', (e) => {
+  const b = e.pointerType === 'mouse' && e.target.closest && e.target.closest('[data-act="stat-bar"]');
+  if (b) selectStatBar(b);
+});
 
 
 // --- What's new
@@ -1040,6 +1138,7 @@ function tick() {
 const sheet = $('#sheet');
 function openSheet(html, onOpen) {
   sheet.innerHTML = `<div class="sheet-body">${html}</div>`;
+  sheet.scrollTop = 0;   // a new sheet starts at the top, even when it replaces one that was scrolled
   if (!sheet.open) sheet.showModal();
   FX.raise();
   onOpen && onOpen(sheet);
@@ -1433,6 +1532,9 @@ document.addEventListener('click', async (e) => {
       case 'badge': badgeSheet(el.dataset.key); break;
       case 'recap': recapSheet(); break;
       case 'whats-new': whatsNewSheet(); break;
+      case 'stats': statsSheet(); break;
+      case 'stats-days': { const y = sheet.scrollTop; await statsSheet(Number(el.dataset.v)); SFX.click(); sheet.scrollTop = y; break; }
+      case 'stat-bar': selectStatBar(el); break;
       case 'board': boardPeriod = el.dataset.v; store.set('board', boardPeriod); SFX.click(); $('#view').innerHTML = viewFriends(); afterFriendsRender(); break;
       case 'friend': friendSheet(el.dataset.name); break;
       case 'friend-accept':

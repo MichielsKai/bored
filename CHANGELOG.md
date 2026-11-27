@@ -18,6 +18,7 @@ Version numbers are **major.minor.patch**. Kai decides whether a release is mino
 - **50 achievements**, from your first spin to a year-long streak, each worth bonus points. Five of them are legendary and absurdly hard. Good luck.
 - **Nederlands.** bored? now speaks Dutch too. It follows your device's language, and you can switch in Settings or on the sign-in screen.
 - **A privacy notice** in Settings and on the sign-in screen that explains, in plain words, what's stored and who sees it.
+- **Site stats for the admin** in Settings: accounts, active people, hours logged, points, page views and sign-ins, per day and in total. Only totals are counted, never who did what.
 
 ### Changed
 - **Anyone can sign up.** You no longer need an invite key to create an account.

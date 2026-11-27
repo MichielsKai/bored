@@ -521,3 +521,20 @@ details.release[open] summary { margin-bottom: 8px; }
 .five:active { transform: scale(.92) rotate(-8deg); }
 .five.on { background: var(--accent); color: var(--accent-ink); cursor: default; }
 .fives { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-weight: 700; flex: none; }
+
+/* ---------- site stats (admin) ---------- */
+.stat-chart { gap: 8px; }
+.stat-chart .section-head { align-items: baseline; gap: 12px; }
+.stat-chart .section-head .small { white-space: nowrap; }
+.daybars { display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: var(--gap, 2px); align-items: end; height: 120px; }
+.daybars button { height: 100%; border: 0; background: none; padding: 0; cursor: pointer; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+.daybars .bar { background: color-mix(in srgb, var(--accent) 45%, var(--surface)); border-radius: 4px 4px 0 0; min-height: 2px; transition: background .15s; }
+.daybars .bar.zero { background: var(--surface-2); }
+.daybars button[aria-pressed="true"] .bar { background: var(--accent); }
+.daybars-axis { display: flex; justify-content: space-between; border-top: 1px solid var(--divider); padding-top: 4px; }
+.daybars-axis span { font-size: 0.7rem; color: var(--text-2); white-space: nowrap; }
+.table-wrap { overflow-x: auto; margin-top: 10px; }
+.stat-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.stat-table th { text-align: right; font-weight: 650; color: var(--text-2); padding: 6px 8px; white-space: nowrap; }
+.stat-table td { text-align: right; padding: 6px 8px; border-top: 1px solid var(--divider); }
+.stat-table th:first-child, .stat-table td:first-child { text-align: left; }

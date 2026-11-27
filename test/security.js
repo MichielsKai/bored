@@ -300,6 +300,8 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   });
   await check('non-admins cannot use admin features', async () => {
     assert.equal((await req('GET', '/api/admin/users', { cookie: bob })).status, 403);
+    assert.equal((await req('GET', '/api/admin/stats', { cookie: bob })).status, 403);
+    assert.equal((await req('GET', '/api/admin/stats')).status, 401);
     assert.equal((await post('/api/admin/users/1/reset', {}, { cookie: bob })).status, 403);
     assert.equal((await post('/api/admin/users/1/delete', {}, { cookie: bob })).status, 403);
   });
@@ -367,6 +369,21 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
     assert.equal((await req('GET', '/api/state', { cookie: carol })).status, 401, 'old sessions survived the reset');
     assert.equal((await post('/api/reset-password', { username: 'carol', code, password: NEW + 'x' })).status, 401, 'code worked twice');
     assert.equal((await post('/api/login', { username: 'carol', password: NEW })).status, 200);
+  });
+  await check('site stats: totals and counts only, never who', async () => {
+    await req('GET', '/'); await req('GET', '/stats-page-that-is-really-the-app');
+    const r = await req('GET', '/api/admin/stats?days=7', { cookie: admin });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.days, 7);
+    assert.equal(r.json.daily.length, 7);
+    assert.ok(r.json.totals.accounts >= 3);
+    assert.ok(r.json.period.page_views >= 2, 'page views not counted');
+    assert.ok(r.json.period.signins >= 1, 'sign-ins not counted');
+    assert.ok(r.json.period.signins_failed >= 1, 'failed sign-ins not counted');
+    assert.ok(r.json.daily.at(-1).active >= 1, 'active people not counted');
+    for (const name of ['bob', 'legacy', 'carol', 'mallory']) assert.ok(!r.text.includes(name), `stats mention ${name}`);
+    assert.equal((await req('GET', '/api/admin/stats?days=99999', { cookie: admin })).json.days, 30);
+    assert.equal((await req('GET', "/api/admin/stats?days=7'--", { cookie: admin })).json.days, 30);
   });
   await check('the admin account cannot be deleted', async () => {
     assert.equal((await post('/api/account/delete', { password: 'old-password-1' }, { cookie: admin })).status, 400);
