@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS login_failures (
+  key TEXT PRIMARY KEY,
+  n INTEGER NOT NULL,
+  until INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS known_devices (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS password_resets (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -124,7 +135,16 @@ const tx = (fn) => {
 // ---------- errors & logging ----------
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = (msg) => { throw new HttpError(400, msg); };
+// Security log, throttled per event type so a flood of junk can't fill the disk.
+const logBudget = new Map();
 const secLog = (event, details = {}) => {
+  const now = Date.now();
+  let b = logBudget.get(event);
+  if (!b || b.reset < now) {
+    if (b && b.dropped) console.log(`${new Date().toISOString()} [security] ${event} (${b.dropped} more not shown)`);
+    b = { n: 0, dropped: 0, reset: now + 60_000 }; logBudget.set(event, b);
+  }
+  if (++b.n > 30) { b.dropped++; return; }
   const d = Object.entries(details).map(([k, v]) => `${k}=${JSON.stringify(String(v)).slice(0, 80)}`).join(' ');
   console.log(`${new Date().toISOString()} [security] ${event} ${d}`);
 };
@@ -147,57 +167,83 @@ function clientIp(req) {
   const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return String(cf || xff || sock).slice(0, 64);
 }
+// For limits, an IPv6 client is its /64 network: one home connection gets billions of
+// addresses, so counting them one by one would let a single attacker rotate forever.
+function ipKey(ip) {
+  const a = String(ip).trim().split('%')[0].replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, '$1');
+  if (!a.includes(':')) return a;
+  const [head, tail] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = a.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64';
+}
 function isSecure(req) {
   if (COOKIE_SECURE === 'true') return true;
   if (COOKIE_SECURE === 'false') return false;
   return isTrustedProxy(req.socket.remoteAddress) && req.headers['x-forwarded-proto'] === 'https';
 }
 
-// ---------- rate limiting ----------
+// ---------- rate limiting (per network) ----------
 const buckets = new Map();
 const MAX_BUCKETS = 50_000;
 function hit(key, max, windowMs) {
   const now = Date.now();
   let b = buckets.get(key);
   if (!b || b.reset < now) {
-    if (buckets.size >= MAX_BUCKETS) buckets.clear(); // never let an attacker grow memory without bound
+    if (buckets.size >= MAX_BUCKETS) {
+      // drop the oldest entries only; never wipe everything
+      let n = 0; for (const k of buckets.keys()) { buckets.delete(k); if (++n >= 5000) break; }
+    }
+    buckets.delete(key);
     b = { n: 0, reset: now + windowMs }; buckets.set(key, b);
   }
   b.n++;
   return b.n <= max ? 0 : Math.ceil((b.reset - now) / 1000);
 }
 function limit(req, name, max, windowMs) {
-  const wait = hit(`${name}:${clientIp(req)}`, max, windowMs);
+  const wait = hit(`${name}:${ipKey(clientIp(req))}`, max, windowMs);
   if (wait) throw new HttpError(429, `Too many attempts. Try again in ${waitText(wait)}.`);
 }
 const waitText = (s) => (s < 90 ? `${s} seconds` : `${Math.ceil(s / 60)} minutes`);
 
-// Per-account slowdown after wrong passwords, independent of IP address.
-// Applied to any username, existing or not, so it doesn't reveal which accounts exist.
-const failures = new Map();
+// ---------- account locks ----------
+// After 5 wrong passwords an account slows down: 30 s, doubling up to 15 min.
+// Stored in the database, so floods and restarts can't wipe them. Lock keys:
+//   user:<name>  attempts from unknown devices (also for usernames that don't exist,
+//                so locks don't reveal which accounts are real)
+//   dev:<hash>   attempts from a device this account signed in on before, so an attacker
+//                guessing wrong can't lock the real owner out of their own devices
+//   uid:<id>     password re-checks inside the app (change password, delete account)
 const failKey = (name) => String(name || '').toLowerCase().slice(0, 64);
-function checkLocked(name) {
-  const f = failures.get(failKey(name));
+function checkLocked(key) {
+  const f = q('SELECT until FROM login_failures WHERE key = ?').get(key);
   if (f && f.until > Date.now()) {
     throw new HttpError(429, `Too many wrong passwords for this account. Try again in ${waitText(Math.ceil((f.until - Date.now()) / 1000))}.`);
   }
 }
-function recordFailure(name, req) {
-  const k = failKey(name);
-  const f = failures.get(k) || { n: 0, until: 0 };
-  f.n++;
-  if (f.n >= 5) {
-    f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - 5));
-    secLog('account-throttled', { user: k, failures: f.n, ip: clientIp(req) });
-  }
-  if (failures.size >= MAX_BUCKETS) failures.clear();
-  failures.set(k, f);
+function recordFailure(key, req) {
+  const now = Date.now();
+  const f = q('SELECT n FROM login_failures WHERE key = ?').get(key);
+  const n = (f ? f.n : 0) + 1;
+  const until = n >= 5 ? now + Math.min(15 * 60_000, 30_000 * 2 ** Math.min(n - 5, 10)) : 0;
+  q(`INSERT INTO login_failures (key, n, until, updated) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET n = excluded.n, until = excluded.until, updated = excluded.updated`).run(key, n, until, now);
+  if (until) secLog('account-throttled', { key, failures: n, ip: clientIp(req) });
 }
-const clearFailures = (name) => failures.delete(failKey(name));
+const clearFailures = (key) => q('DELETE FROM login_failures WHERE key = ?').run(key);
+
+// One password check per account at a time: parallel guesses can't slip past the lock.
+const inFlight = new Set();
+async function oneAtATime(key, fn) {
+  if (inFlight.has(key)) throw new HttpError(429, 'Another sign-in for this account is being checked. Try again in a moment.');
+  inFlight.add(key);
+  try { return await fn(); } finally { inFlight.delete(key); }
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
-  for (const [k, f] of failures) if (f.until < now - 3600_000) failures.delete(k);
 }, 60_000).unref();
 
 // ---------- passwords ----------
@@ -210,10 +256,11 @@ const KEYLEN = 64;
 
 // At most 3 hashes at once, so a flood of logins can't exhaust the Pi's memory or CPU.
 let hashing = 0; const waiting = [];
-async function withHashSlot(fn) {
+// Sign-ins from a known device skip the queue, so a login flood can't keep owners out.
+async function withHashSlot(fn, priority = false) {
   if (hashing >= 3) {
-    if (waiting.length >= 30) throw new HttpError(503, 'The server is busy. Try again in a moment.');
-    await new Promise((r) => waiting.push(r));
+    if (waiting.length >= (priority ? 60 : 30)) throw new HttpError(503, 'The server is busy. Try again in a moment.');
+    await new Promise((r) => (priority ? waiting.unshift(r) : waiting.push(r)));
   }
   hashing++;
   try { return await fn(); } finally { hashing--; const next = waiting.shift(); if (next) next(); }
@@ -228,7 +275,7 @@ async function hashPassword(password) {
 // A fixed hash to compare against when the username doesn't exist, so timing is identical.
 let DUMMY_HASH = null;
 const dummyReady = hashPassword(crypto.randomBytes(16).toString('hex')).then((h) => { DUMMY_HASH = h; });
-async function verifyPassword(password, row) {
+async function verifyPassword(password, row, priority = false) {
   if (!row) {
     await dummyReady;
     await verifyPassword(password, { pass_hash: DUMMY_HASH });
@@ -239,12 +286,12 @@ async function verifyPassword(password, row) {
     const [, N, r, p, salt, hash] = row.pass_hash.split('$');
     expected = Buffer.from(hash, 'base64');
     key = await withHashSlot(() => scrypt(normPw(password), Buffer.from(salt, 'base64'), expected.length,
-      { N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem }));
+      { N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem }), priority);
     needsRehash = Number(N) !== SCRYPT.N || Number(r) !== SCRYPT.r || Number(p) !== SCRYPT.p;
   } else {
     // legacy v1: hex hash, hex salt string, password not normalised
     expected = Buffer.from(row.pass_hash, 'hex');
-    key = await withHashSlot(() => scrypt(String(password), row.salt, KEYLEN, LEGACY));
+    key = await withHashSlot(() => scrypt(String(password), row.salt, KEYLEN, LEGACY), priority);
     needsRehash = true;
   }
   const ok = key.length === expected.length && crypto.timingSafeEqual(key, expected);
@@ -345,12 +392,36 @@ function parseCookies(req) {
 }
 // Over HTTPS the cookie gets the __Host- prefix: browsers then refuse to let any other
 // (sub)domain set or overwrite it.
-const cookieName = (req) => (isSecure(req) ? '__Host-bored_sid' : 'bored_sid');
-const tokenFrom = (req) => { const c = parseCookies(req); return c['__Host-bored_sid'] || c.bored_sid || ''; };
-function setSessionCookie(req, res, token, maxAgeSec) {
-  const cookies = [`${cookieName(req)}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${isSecure(req) ? '; Secure' : ''}`];
-  if (isSecure(req)) cookies.push('bored_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure'); // clear any pre-HTTPS cookie
-  res.setHeader('Set-Cookie', cookies);
+// SameSite=Strict: browsers never send these cookies on requests started by another site.
+const cookieName = (req, base) => (isSecure(req) ? `__Host-${base}` : base);
+const cookieFrom = (req, base) => { const c = parseCookies(req); return c[`__Host-${base}`] || c[base] || ''; };
+const tokenFrom = (req) => cookieFrom(req, 'bored_sid');
+function addCookie(res, cookie) {
+  const prev = res.getHeader('Set-Cookie');
+  res.setHeader('Set-Cookie', [...(prev ? [].concat(prev) : []), cookie]);
+}
+function setCookie(req, res, base, value, maxAgeSec) {
+  const secure = isSecure(req);
+  addCookie(res, `${cookieName(req, base)}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${secure ? '; Secure' : ''}`);
+  if (secure) addCookie(res, `${base}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0; Secure`); // clear any pre-HTTPS cookie
+}
+const setSessionCookie = (req, res, token, maxAgeSec) => setCookie(req, res, 'bored_sid', token, maxAgeSec);
+
+// "Known device" cookie: proves this browser signed in to an account before. It never logs
+// anyone in by itself; it only keeps the owner's devices out of locks caused by strangers.
+function knownDevice(req, userId) {
+  const token = cookieFrom(req, 'bored_dev');
+  if (!userId || !token || token.length > 100) return null;
+  const hash = sha256(token);
+  return q('SELECT 1 FROM known_devices WHERE token_hash = ? AND user_id = ?').get(hash, userId) ? hash : null;
+}
+function rememberDevice(req, res, userId) {
+  if (knownDevice(req, userId)) return;
+  const token = crypto.randomBytes(32).toString('base64url');
+  q('INSERT INTO known_devices (token_hash, user_id, created_at) VALUES (?, ?, ?)').run(sha256(token), userId, Date.now());
+  q(`DELETE FROM known_devices WHERE user_id = ? AND token_hash NOT IN
+     (SELECT token_hash FROM known_devices WHERE user_id = ? ORDER BY created_at DESC LIMIT 20)`).run(userId, userId);
+  setCookie(req, res, 'bored_dev', token, 400 * 86400);
 }
 function deviceLabel(ua) {
   ua = String(ua || '');
@@ -417,7 +488,7 @@ function ownItem(user, itemId) {
   return item;
 }
 function addLog(user, itemId, minutes, endedAt, source) {
-  if (q('SELECT COUNT(*) AS n FROM time_logs WHERE user_id = ?').get(user.id).n >= 100_000) bad('You’ve reached the maximum number of sessions');
+  if (q('SELECT COUNT(*) AS n FROM time_logs WHERE user_id = ?').get(user.id).n >= 20_000) bad('You’ve reached the maximum number of sessions');
   q('INSERT INTO time_logs (user_id, item_id, minutes, ended_at, source) VALUES (?, ?, ?, ?, ?)').run(user.id, itemId, minutes, endedAt, source);
 }
 function fmtH(min) { return `${Math.round((min / 60) * 10) / 10} h`; }
@@ -452,7 +523,7 @@ function buildState(user) {
     },
     logs: q(`SELECT l.id, l.item_id, l.minutes, l.ended_at, l.source, i.name AS item_name
              FROM time_logs l JOIN items i ON i.id = l.item_id
-             WHERE l.user_id = ? AND l.ended_at > ? ORDER BY l.ended_at DESC`).all(user.id, Date.now() - 120 * DAY),
+             WHERE l.user_id = ? AND l.ended_at > ? ORDER BY l.ended_at DESC LIMIT 2000`).all(user.id, Date.now() - 70 * DAY),
     wishes: q('SELECT id, name, price, created_at, bought_at FROM wishes WHERE user_id = ? ORDER BY bought_at IS NOT NULL, created_at DESC').all(user.id),
     purchases: q('SELECT id, name, cost_minutes, created_at FROM purchases WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id),
   };
@@ -494,6 +565,7 @@ route('POST', '/api/register', false, async (req, res, body) => {
   });
   secLog('account-created', { user: username, ip: clientIp(req) });
   startSession(req, res, userId);
+  rememberDevice(req, res, userId);
   return { ok: true };
 });
 
@@ -501,18 +573,23 @@ route('POST', '/api/login', false, async (req, res, body) => {
   limit(req, 'login', 20, 15 * 60_000);
   const username = String(body.username || '').trim().slice(0, 64);
   const password = String(body.password || '').slice(0, PASSWORD_MAX * 4);
-  checkLocked(username);
   const u = q('SELECT id, username, pass_hash, salt FROM users WHERE username = ?').get(username);
-  const { ok, needsRehash } = await verifyPassword(password, u);
-  if (!ok) {
-    recordFailure(username, req);
-    secLog('login-failed', { user: username, ip: clientIp(req) });
-    throw new HttpError(401, 'Wrong username or password');
-  }
-  clearFailures(username);
-  if (needsRehash) q('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(await hashPassword(password), '', u.id);
-  startSession(req, res, u.id);
-  return { ok: true };
+  const dev = knownDevice(req, u && u.id);
+  const key = dev ? `dev:${dev}` : `user:${failKey(username)}`;
+  return oneAtATime(key, async () => {
+    checkLocked(key);
+    const { ok, needsRehash } = await verifyPassword(password, u, !!dev);
+    if (!ok) {
+      recordFailure(key, req);
+      secLog('login-failed', { user: username, ip: clientIp(req), device: dev ? 'known' : 'new' });
+      throw new HttpError(401, 'Wrong username or password');
+    }
+    clearFailures(key);
+    if (needsRehash) q('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(await hashPassword(password), '', u.id);
+    startSession(req, res, u.id);
+    rememberDevice(req, res, u.id);
+    return { ok: true };
+  });
 });
 
 route('POST', '/api/logout', false, (req, res) => {
@@ -525,26 +602,33 @@ route('POST', '/api/logout', false, (req, res) => {
 route('POST', '/api/reset-password', false, async (req, res, body) => {
   limit(req, 'reset', 10, 3600_000);
   const username = String(body.username || '').trim().slice(0, 64);
-  checkLocked(username);
-  const u = q('SELECT id, username FROM users WHERE username = ?').get(username);
-  const r = u && q('SELECT * FROM password_resets WHERE user_id = ?').get(u.id);
-  const valid = !!r && r.expires_at > Date.now() && safeEqual(sha256(normKey(body.code)), r.code_hash);
-  if (!valid) {
-    recordFailure(username, req);
-    secLog('reset-failed', { user: username, ip: clientIp(req) });
-    throw new HttpError(401, 'That reset code isn’t valid or has expired. Ask the admin for a new one.');
-  }
-  await checkNewPassword(body.password, u.username);
-  const passHash = await hashPassword(body.password);
-  tx(() => {
-    q('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(passHash, '', u.id);
-    q('DELETE FROM password_resets WHERE user_id = ?').run(u.id);
-    q('DELETE FROM auth_sessions WHERE user_id = ?').run(u.id);
+  const key = `reset:${failKey(username)}`;
+  return oneAtATime(key, async () => {
+    checkLocked(key);
+    const u = q('SELECT id, username FROM users WHERE username = ?').get(username);
+    const codeHash = sha256(normKey(body.code));
+    const r = u && q('SELECT * FROM password_resets WHERE user_id = ?').get(u.id);
+    if (!(r && r.expires_at > Date.now() && safeEqual(codeHash, r.code_hash))) {
+      recordFailure(key, req);
+      secLog('reset-failed', { user: username, ip: clientIp(req) });
+      throw new HttpError(401, 'That reset code isn’t valid or has expired. Ask the admin for a new one.');
+    }
+    await checkNewPassword(body.password, u.username);
+    const passHash = await hashPassword(body.password);
+    tx(() => {
+      // use the code up atomically: if it's gone by now, someone else already used it
+      const used = q('DELETE FROM password_resets WHERE user_id = ? AND code_hash = ? AND expires_at > ?').run(u.id, r.code_hash, Date.now());
+      if (!used.changes) throw new HttpError(401, 'That reset code isn’t valid or has expired. Ask the admin for a new one.');
+      q('UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?').run(passHash, '', u.id);
+      q('DELETE FROM auth_sessions WHERE user_id = ?').run(u.id);
+    });
+    clearFailures(key);
+    clearFailures(`user:${failKey(u.username)}`);
+    secLog('password-reset-used', { user: u.username, ip: clientIp(req) });
+    startSession(req, res, u.id);
+    rememberDevice(req, res, u.id);
+    return { ok: true };
   });
-  clearFailures(username);
-  secLog('password-reset-used', { user: u.username, ip: clientIp(req) });
-  startSession(req, res, u.id);
-  return { ok: true };
 });
 
 // --- account
@@ -553,11 +637,13 @@ route('GET', '/api/state', true, (req, res, body, user) => buildState(user));
 async function requirePassword(req, user, password, label = 'Password is wrong') {
   limit(req, 'password', 10, 15 * 60_000);
   const key = `uid:${user.id}`;
-  checkLocked(key);
-  const row = q('SELECT pass_hash, salt FROM users WHERE id = ?').get(user.id);
-  const { ok } = await verifyPassword(String(password || '').slice(0, PASSWORD_MAX * 4), row);
-  if (!ok) { recordFailure(key, req); throw new HttpError(401, label); }
-  clearFailures(key);
+  await oneAtATime(key, async () => {
+    checkLocked(key);
+    const row = q('SELECT pass_hash, salt FROM users WHERE id = ?').get(user.id);
+    const { ok } = await verifyPassword(String(password || '').slice(0, PASSWORD_MAX * 4), row);
+    if (!ok) { recordFailure(key, req); throw new HttpError(401, label); }
+    clearFailures(key);
+  });
 }
 
 route('POST', '/api/password', true, async (req, res, body, user) => {
@@ -641,7 +727,8 @@ route('POST', '/api/admin/users/:id/reset', true, (req, res, body, user, p) => {
   q(`INSERT INTO password_resets (user_id, code_hash, expires_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at`)
     .run(target.id, sha256(normKey(code)), Date.now() + RESET_CODE_TTL);
-  clearFailures(target.username);
+  clearFailures(`user:${failKey(target.username)}`);
+  clearFailures(`reset:${failKey(target.username)}`);
   secLog('reset-code-created', { by: user.username, for: target.username });
   return { code, username: target.username, expiresAt: Date.now() + RESET_CODE_TTL };
 });
@@ -830,7 +917,7 @@ async function handle(req, res) {
 
   try {
     // Overall per-IP cap on API use, to protect the Pi.
-    const wait = hit(`api:${clientIp(req)}`, 600, 5 * 60_000);
+    const wait = hit(`api:${ipKey(clientIp(req))}`, 600, 5 * 60_000);
     if (wait) throw new HttpError(429, `Slow down a little. Try again in ${waitText(wait)}.`);
 
     const r = routes.find((x) => x.method === req.method && x.re.test(pathname));
@@ -870,6 +957,7 @@ server.on('clientError', (err, socket) => { if (socket.writable) socket.end('HTT
 const cleanup = () => {
   q('DELETE FROM auth_sessions WHERE expires_at < ? OR last_seen < ?').run(Date.now(), Date.now() - SESSION_IDLE);
   q('DELETE FROM password_resets WHERE expires_at < ?').run(Date.now());
+  q('DELETE FROM login_failures WHERE until < ? AND updated < ?').run(Date.now() - 3600_000, Date.now() - 3600_000);
 };
 cleanup();
 setInterval(cleanup, 3600_000).unref();

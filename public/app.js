@@ -337,6 +337,8 @@ function viewStats() {
 
 // --- Auth
 const urlInvite = new URLSearchParams(location.search).get('invite') || '';
+// don't leave the key sitting in the address bar or browser history
+if (urlInvite) history.replaceState(null, '', '/');
 function renderAuth(mode, error = '') {
   if (!mode) mode = urlInvite || !config.needsInvite ? 'register' : 'login';
   const reg = mode === 'register', reset = mode === 'reset';
@@ -1014,7 +1016,6 @@ document.addEventListener('submit', async (e) => {
       case 'login':
       case 'register':
         await api('POST', '/api/' + f.dataset.form, { username: formVal(f, 'username'), password: formVal(f, 'password'), invite: formVal(f, 'invite') || undefined });
-        if (urlInvite) history.replaceState(null, '', '/');
         if (f.dataset.form === 'register') config.needsInvite = true;
         await api('GET', '/api/state');
         break;

@@ -110,8 +110,10 @@ What's in place, and tested on every build by `test/security.js` (an attack test
 **Passwords**
 - Hashed with scrypt at OWASP-recommended cost (N=2^15, r=8, p=3), a unique salt per password, never stored or logged in plain text. Older hashes are upgraded automatically on the next login.
 - New passwords need 10+ characters, can't be common, repetitive or contain the username, and are checked against known data breaches via Have I Been Pwned. Only the first 5 characters of a hash ever leave the Pi (k-anonymity).
-- 5 wrong passwords slow that account down (30 seconds, doubling up to 15 minutes), whoever is trying and from wherever. Unknown usernames behave exactly the same, so accounts can't be probed. Each IP also gets 20 login attempts per 15 minutes.
-- Hashing runs at most 3 at a time, so a login flood can't exhaust the Pi.
+- 5 wrong passwords slow that account down (30 seconds, doubling up to 15 minutes), whoever is trying and from wherever. Unknown usernames behave exactly the same, so accounts can't be probed. Locks are stored in the database, so floods and restarts can't wipe them, and only one password check per account runs at a time, so parallel guessing doesn't help.
+- Devices you've signed in on before get a "known device" cookie. Strangers guessing your password lock only *new* devices, not your own phone and laptop.
+- Each network gets 20 login attempts per 15 minutes. IPv6 counts per /64, because one home connection has billions of addresses.
+- Hashing runs at most 3 at a time, so a login flood can't exhaust the Pi. Known devices skip the queue.
 
 **Accounts**
 - Sign-up needs the invite key, checked before anything else.
@@ -119,7 +121,7 @@ What's in place, and tested on every build by `test/security.js` (an attack test
 - Settings → Signed-in devices: see where you're logged in and sign out other devices. Logins end after 30 days unused (90 days at most). Changing or resetting a password signs out every other device.
 
 **Web**
-- Session cookies are random 256-bit tokens, stored only as hashes. They're `HttpOnly`, `SameSite=Lax`, and `Secure` with the `__Host-` prefix over HTTPS.
+- Session cookies are random 256-bit tokens, stored only as hashes. They're `HttpOnly`, `SameSite=Strict`, and `Secure` with the `__Host-` prefix over HTTPS.
 - Cross-site requests are blocked (same-origin JSON only, `Sec-Fetch-Site` check).
 - Strict Content Security Policy (no inline scripts, no third-party anything), HSTS, no framing, no referrers, locked-down browser permissions.
 - Proxy headers (`CF-Connecting-IP`, `X-Forwarded-Proto`) are only trusted from the tunnel's own address, so nobody on your network can fake them.
@@ -130,7 +132,12 @@ What's in place, and tested on every build by `test/security.js` (an attack test
 - The container runs as a normal user with a read-only filesystem, no Linux capabilities, no privilege escalation, and capped memory and processes.
 - If your Cloudflare tunnel runs on the Pi, the app only listens on localhost.
 - The database and backups are readable only by the app's user.
-- The image is rebuilt weekly with the latest Alpine and Node security patches, and Dependabot proposes updates to the build tools.
+- The image is rebuilt weekly with the latest Alpine and Node security patches. Build tools are pinned to exact commits, and Dependabot proposes updates.
+- The updater takes a new `docker-compose.yml` only if it keeps every lockdown and mounts nothing but `./data`. It never replaces itself, because it runs outside the container. When `update.log` says a newer `update.sh` is available, run `bash setup.sh`.
+
+**Worth doing yourself**
+- Turn on two-factor authentication on your GitHub account. Whoever controls the repo controls what runs on the Pi.
+- Optional: in Cloudflare (Security → WAF → Rate limiting rules), add a rule for `/api/login` (e.g. 20 requests per minute per IP). It stops floods before they reach the Pi.
 
 **Security log:** `docker compose logs bored | grep security` shows failed logins, lockouts, password changes and admin actions.
 

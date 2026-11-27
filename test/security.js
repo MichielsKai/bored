@@ -52,8 +52,10 @@ function req(method, p, { body, cookie, headers = {}, host = '127.0.0.1', raw } 
       res.on('end', () => {
         let json = null; try { json = JSON.parse(buf); } catch { /* not json */ }
         const setCookie = res.headers['set-cookie'] || [];
-        const sid = setCookie.map((c) => c.split(';')[0]).find((c) => /bored_sid=./.test(c));
-        resolve({ status: res.statusCode, headers: res.headers, text: buf, json, cookie: sid, setCookie });
+        const pairs = setCookie.map((c) => c.split(';')[0]).filter((c) => !/=$/.test(c));
+        const sid = pairs.find((c) => /bored_sid=./.test(c));
+        const dev = pairs.find((c) => /bored_dev=./.test(c));
+        resolve({ status: res.statusCode, headers: res.headers, text: buf, json, cookie: sid, device: dev, setCookie });
       });
     });
     r.on('error', reject);
@@ -184,11 +186,11 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
   await check('session cookie is HttpOnly and SameSite', async () => {
     const r = await post('/api/login', { username: 'bob', password: STRONG });
     const c = r.setCookie.join(' ');
-    assert.match(c, /HttpOnly/); assert.match(c, /SameSite=Lax/);
+    assert.match(c, /HttpOnly/); assert.match(c, /SameSite=Strict/); assert.doesNotMatch(c, /SameSite=Lax/);
   });
   await check('behind HTTPS proxy the cookie is Secure with __Host- prefix, plus HSTS', async () => {
     const r = await post('/api/login', { username: 'bob', password: STRONG }, { headers: { 'x-forwarded-proto': 'https' } });
-    assert.match(r.setCookie[0], /^__Host-bored_sid=.+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/);
+    assert.match(r.setCookie[0], /^__Host-bored_sid=.+; Path=\/; HttpOnly; SameSite=Strict; Max-Age=\d+; Secure$/);
     assert.ok(r.headers['strict-transport-security']);
   });
   await check('wrong password and unknown user give the same answer', async () => {
@@ -222,6 +224,50 @@ const skip = (name, why) => { skipped++; console.log(`  --  ${name} (skipped: ${
       assert.equal(r.headers['strict-transport-security'], undefined);
     });
   }
+
+  console.log('\nAttacks found in the pen test (regression checks)');
+  await check('parallel guesses can’t get past the lock', async () => {
+    await post('/api/register', { username: 'pat', password: STRONG, invite: inviteKey });
+    const tries = await Promise.all(Array.from({ length: 25 }, (_, i) =>
+      post('/api/login', { username: 'pat', password: `parallel-${i}-guess` }, { headers: { 'cf-connecting-ip': `198.18.${i}.1` } })));
+    const checked = tries.filter((t) => t.status === 401).length;
+    assert.ok(checked <= 5, `${checked} parallel guesses were checked`);
+  });
+  await check('strangers guessing wrong can’t lock the owner out of their own device', async () => {
+    const reg = await post('/api/register', { username: 'dana', password: STRONG, invite: inviteKey });
+    const myDevice = reg.device;
+    assert.ok(myDevice, 'no known-device cookie was set');
+    for (let i = 0; i < 6; i++) await post('/api/login', { username: 'dana', password: `attacker-${i}-guess` }, { headers: { 'cf-connecting-ip': `198.19.${i}.1` } });
+    assert.equal((await post('/api/login', { username: 'dana', password: STRONG })).status, 429, 'unknown device should be locked');
+    const mine = await post('/api/login', { username: 'dana', password: STRONG }, { cookie: myDevice });
+    assert.equal(mine.status, 200, `owner on known device got ${mine.status}`);
+  });
+  await check('a known-device cookie only works for its own account', async () => {
+    const other = (await post('/api/register', { username: 'eve', password: STRONG2, invite: inviteKey })).device;
+    for (let i = 0; i < 6; i++) await post('/api/login', { username: 'dana', password: `x-${i}-guess-x` }, { headers: { 'cf-connecting-ip': `198.20.${i}.1` } });
+    assert.equal((await post('/api/login', { username: 'dana', password: STRONG }, { cookie: other })).status, 429);
+  });
+  await check('locks survive a restart (and can’t be flushed by floods)', async () => {
+    assert.equal((await post('/api/login', { username: 'dana', password: STRONG })).status, 429);
+    await stop(); await start();
+    assert.equal((await post('/api/login', { username: 'dana', password: STRONG })).status, 429);
+  });
+  await check('rotating IPv6 addresses within one /64 doesn’t escape the per-IP limit', async () => {
+    let blocked = 0;
+    for (let i = 1; i <= 25; i++) {
+      const r = await post('/api/login', { username: `v6probe${i}`, password: 'x-x-x-x-x' }, { headers: { 'cf-connecting-ip': `2001:db8:abcd:12::${i.toString(16)}` } });
+      if (r.status === 429) blocked++;
+    }
+    assert.ok(blocked >= 5, `only ${blocked} of 25 blocked`);
+  });
+  await check('a reset code can’t be used twice, even at the same moment', async () => {
+    const users = (await req('GET', '/api/admin/users', { cookie: admin })).json.users;
+    const patId = users.find((u) => u.username === 'pat').id;
+    const { code } = (await post(`/api/admin/users/${patId}/reset`, {}, { cookie: admin })).json;
+    const res = await Promise.all(['one-two-three-four-a', 'five-six-seven-eight-b'].map((pw, i) =>
+      post('/api/reset-password', { username: 'pat', code, password: pw }, { headers: { 'cf-connecting-ip': `198.21.${i}.1` } })));
+    assert.equal(res.filter((r) => r.status === 200).length, 1, res.map((r) => r.status).join(','));
+  });
 
   console.log('\nCross-site requests');
   await check('form-style (non-JSON) requests are refused', async () => {
